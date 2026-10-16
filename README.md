@@ -27,3 +27,13 @@ cargo run --release -p instantsplat-rs -- fit photos/*.jpg --out runs/thing
 
 Each crate's README has the details. Examples: `cargo run --release -p <crate> --example <name>`;
 see `mapanything-rs/examples/` and `instantsplat-rs/examples/`.
+
+## Acknowledgements
+
+- [MapAnything](https://github.com/facebookresearch/map-anything) by Meta
+- [UniCeption](https://github.com/castacks/UniCeption) by AirLab
+- [DINOv2](https://github.com/facebookresearch/dinov2) by Meta
+- InstantSplat (Fan et al., 2024, [arXiv:2403.20309](https://arxiv.org/abs/2403.20309)): the recipe
+- 3D Gaussian Splatting (Kerbl et al., SIGGRAPH 2023, [paper](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)): the rasterizer maths
+- [candle](https://github.com/huggingface/candle) by Hugging Face
+- [wgpu](https://github.com/gfx-rs/wgpu)
