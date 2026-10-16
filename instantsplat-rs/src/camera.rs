@@ -1,0 +1,130 @@
+//! Pinhole cameras in the OpenCV convention (x right, y down, z forward), with pixel centers
+//! at integer coordinates: pixel (i, j) of the image is at (u, v) = (i, j).
+
+use bytemuck::{Pod, Zeroable};
+use nalgebra::{Matrix3, Vector3};
+
+#[derive(Clone, Debug)]
+pub struct PinholeCamera {
+    /// Camera to world.
+    pub rotation: Matrix3<f64>,
+    pub translation: Vector3<f64>,
+    /// In pixels of the image this camera renders.
+    pub focal: [f64; 2],
+    pub principal_point: [f64; 2],
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What the projection shaders read: world-to-camera as a 3x4 (row-major, padded to vec4
+/// rows) and the intrinsics.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct CameraUniform {
+    pub world_to_camera_rows: [[f32; 4]; 3],
+    pub focal: [f32; 2],
+    pub principal_point: [f32; 2],
+    pub width: u32,
+    pub height: u32,
+    pub tiles_x: u32,
+    pub tiles_y: u32,
+}
+
+/// What the backward pass sums over the Gaussians of one view (`project_backward.wgsl`,
+/// `reduce_camera_gradient.wgsl`): the loss gradient with respect to the entries of the
+/// world-to-camera rotation (rows, as `CameraUniform`), the world-to-camera translation
+/// and the focal lengths. `camera_pose::pose_gradient` chains it to the pose parameters.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub struct CameraGradient {
+    pub world_to_camera_rotation_rows: [[f32; 3]; 3],
+    pub world_to_camera_translation: [f32; 3],
+    pub focal: [f32; 2],
+}
+
+impl PinholeCamera {
+    pub fn world_to_camera(&self) -> (Matrix3<f64>, Vector3<f64>) {
+        let rotation = self.rotation.transpose();
+        (rotation, -(rotation * self.translation))
+    }
+
+    pub fn uniform(&self, tile_size: u32) -> CameraUniform {
+        let (rotation, translation) = self.world_to_camera();
+        let row = |r: usize| {
+            [
+                rotation[(r, 0)] as f32,
+                rotation[(r, 1)] as f32,
+                rotation[(r, 2)] as f32,
+                translation[r] as f32,
+            ]
+        };
+        CameraUniform {
+            world_to_camera_rows: [row(0), row(1), row(2)],
+            focal: [self.focal[0] as f32, self.focal[1] as f32],
+            principal_point: [self.principal_point[0] as f32, self.principal_point[1] as f32],
+            width: self.width,
+            height: self.height,
+            tiles_x: self.width.div_ceil(tile_size),
+            tiles_y: self.height.div_ceil(tile_size),
+        }
+    }
+
+    pub fn position(&self) -> Vector3<f64> {
+        self.translation
+    }
+}
+
+/// Radius of the smallest sphere centered on the mean camera position that contains every
+/// camera, times 1.1, as the reference 3DGS `cameras_extent`. Scales the position
+/// learning rate.
+pub fn cameras_extent(cameras: &[PinholeCamera]) -> f64 {
+    assert!(!cameras.is_empty(), "no cameras");
+    let center = cameras
+        .iter()
+        .map(PinholeCamera::position)
+        .sum::<Vector3<f64>>()
+        / cameras.len() as f64;
+    let radius = cameras
+        .iter()
+        .map(|camera| (camera.position() - center).norm())
+        .fold(0.0, f64::max);
+    radius * 1.1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_to_camera_inverts_pose() {
+        let rotation = nalgebra::Rotation3::from_euler_angles(0.3, -0.2, 0.9).into_inner();
+        let translation = Vector3::new(1.0, 2.0, 3.0);
+        let camera = PinholeCamera {
+            rotation,
+            translation,
+            focal: [100.0, 100.0],
+            principal_point: [10.0, 10.0],
+            width: 20,
+            height: 20,
+        };
+        let (w_rotation, w_translation) = camera.world_to_camera();
+        let point = Vector3::new(0.5, -1.0, 4.0);
+        let in_camera = w_rotation * point + w_translation;
+        let back = rotation * in_camera + translation;
+        assert!((back - point).norm() < 1e-12);
+    }
+
+    #[test]
+    fn extent_is_1_1_times_farthest_camera() {
+        let at = |x: f64| PinholeCamera {
+            rotation: Matrix3::identity(),
+            translation: Vector3::new(x, 0.0, 0.0),
+            focal: [1.0, 1.0],
+            principal_point: [0.0, 0.0],
+            width: 1,
+            height: 1,
+        };
+        let extent = cameras_extent(&[at(-1.0), at(1.0), at(3.0)]);
+        assert!((extent - 2.2).abs() < 1e-12);
+    }
+}

@@ -1,17 +1,3 @@
-[package]
-name = "mapanything-rs"
-version = "0.1.0"
-edition = "2024"
-description = "MapAnything feed-forward 3D reconstruction from images, on candle"
-license = "Apache-2.0"
-readme = "README.md"
-
-[dependencies]
-anyhow = "1"
-candle-core = { version = "0.11", features = ["metal"] }
-candle-nn = { version = "0.11", features = ["metal"] }
-clap = { version = "4", features = ["derive"] }
-hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-kamadak-exif = "0.6"
-nalgebra = "0.34"
+[workspace]
+resolver = "3"
+members = ["mapanything-rs", "instantsplat-rs"]

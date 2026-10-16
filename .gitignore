@@ -1,5 +1,2 @@
 /target
-*.ply
-*.safetensors
-images/**
-output/**
+.DS_Store

@@ -177,7 +177,7 @@ fn composite_on_backdrop(mut rgba: RgbaImage) -> DynamicImage {
 /// The upright image, cropped to its foreground and composited on the backdrop, at full
 /// resolution. Alpha is kept: it marks the foreground.
 pub fn load_cutout(path: &Path) -> Result<Cutout> {
-    let upright = read_upright(path)?;
+    let upright = read_upright(path).with_context(|| format!("reading image {}", path.display()))?;
     let original_size = (upright.width(), upright.height());
     let (foreground_crop, corner) = crop_to_foreground(upright.to_rgba8())
         .with_context(|| format!("cropping {}", path.display()))?;
