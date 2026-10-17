@@ -3,8 +3,8 @@
   "private": true,
   "description": "Builds and serves the browser demo: npm run build, npm start, open http://localhost:8787/",
   "scripts": {
-    "build": "instantsplat-rs/web/build_site.sh",
-    "start": "http-server instantsplat-rs/web/site -p 8787 -c-1 -s"
+    "build": "instantsplat-rs/web/build.sh",
+    "start": "http-server instantsplat-rs/web -p 8787 -c-1 -s"
   },
   "devDependencies": {
     "http-server": "14.1.1"

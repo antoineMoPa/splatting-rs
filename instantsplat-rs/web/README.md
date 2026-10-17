@@ -33,25 +33,10 @@ The page also loads a `fit` run (`splat.ply`, `cameras.json` and the `input_view
 it was trained on) from files (under "Advanced") or `?run=<directory URL>`; the example
 run is the default scene.
 
-## Build
+## Build and serve
 
-`rustup target add wasm32-unknown-unknown`, `cargo install wasm-bindgen-cli --version 0.2.129`:
-
-```
-cd web
-cargo build --release
-wasm-bindgen --target web --out-dir pkg ../../target/wasm32-unknown-unknown/release/instantsplat_web.wasm
-```
-
-`.cargo/config.toml` turns on `simd128`; `Cargo.toml` patches candle to the upstream commit
-that makes its SIMD kernels compile for wasm32 (the native workspace keeps the release).
-Serve the crate directory with any static file server and open the page in Chrome (WebGPU
-needs `localhost` or https).
-
-## As a site
-
-`build_site.sh` builds everything into `site/` with `example/` (a `fit` run of the six duck
-photos) as the default scene:
+`rustup target add wasm32-unknown-unknown`, `cargo install wasm-bindgen-cli --version 0.2.129`,
+then from the repository root (`package.json` there):
 
 ```
 npm install
@@ -60,11 +45,15 @@ npm start
 open http://localhost:8787/
 ```
 
-(`package.json` at the repository root.)
+`build.sh` compiles the wasm module into `pkg/`; the page is this directory as is, with
+`example/` (a `fit` run of the six duck photos) as the default scene. `.cargo/config.toml`
+turns on `simd128`; `Cargo.toml` patches candle to the upstream commit that makes its SIMD
+kernels compile for wasm32 (the native workspace keeps the release). WebGPU needs
+`localhost` or https.
 
-`.github/workflows/pages.yml` at the repository root runs the same script on every push
-to `main` and deploys `site/` to GitHub Pages (enable Pages with source "GitHub Actions"
-in the repository settings once).
+`.github/workflows/pages.yml` at the repository root runs `build.sh` on every push to
+`main` and deploys this directory to GitHub Pages (enable Pages with source "GitHub
+Actions" in the repository settings once).
 
 The headless test: `web_da3_shot.mjs` in the Playwright scratch directory loads the page,
 picks the photos through the file input, waits for the reconstruction, screenshots the

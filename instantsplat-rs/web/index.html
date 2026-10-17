@@ -162,8 +162,10 @@ async function train(steps) {
 
 // Depth Anything 3 runs in a worker (the network takes a while on one CPU thread and must
 // not freeze the page); its result is a run, loaded like any other. One request at a time:
-// the answer to `ask` is the worker's next message that is not progress.
-const worker = new Worker("./worker.js", { type: "module" });
+// the answer to `ask` is the worker's next message that is not progress. The URL changes
+// per load: browsers keep worker scripts past a reload, and an old worker with a new page
+// breaks the messages between them.
+const worker = new Worker(`./worker.js?load=${Date.now()}`, { type: "module" });
 let request = null;
 worker.onmessage = ({ data }) => {
   if (data.type === "progress") { request.progress(data); return; }
