@@ -73,6 +73,22 @@ impl PinholeCamera {
         self.translation
     }
 
+    /// This camera rendering a `width` x `height` image instead: same pose and focal
+    /// lengths, the old image's center at the new one's, so a wider image shows more of the
+    /// scene at the sides rather than a stretched view.
+    pub fn with_image_size(&self, width: u32, height: u32) -> PinholeCamera {
+        let shift = |new: u32, old: u32| (new as f64 - old as f64) / 2.0;
+        PinholeCamera {
+            principal_point: [
+                self.principal_point[0] + shift(width, self.width),
+                self.principal_point[1] + shift(height, self.height),
+            ],
+            width,
+            height,
+            ..self.clone()
+        }
+    }
+
     /// This camera swung about `center` (a novel viewpoint): `pitch` radians about its own
     /// right axis, then `yaw` radians about the scene's vertical axis (y, camera 0's
     /// down); it keeps looking at what it looked at relative to `center`.
@@ -149,6 +165,25 @@ mod tests {
         };
         assert!((in_camera(&orbited) - in_camera(&camera)).norm() < 1e-12);
         assert_eq!(camera.orbited(center, 0.0, 0.0).translation, camera.translation);
+    }
+
+    #[test]
+    fn a_wider_image_keeps_the_center_and_the_scale() {
+        let camera = PinholeCamera {
+            rotation: Matrix3::identity(),
+            translation: Vector3::zeros(),
+            focal: [100.0, 100.0],
+            principal_point: [9.5, 14.5],
+            width: 20,
+            height: 30,
+        };
+        let wider = camera.with_image_size(40, 30);
+        assert_eq!(wider.principal_point, [19.5, 14.5]);
+        assert_eq!((wider.width, wider.height), (40, 30));
+        assert_eq!(wider.focal, camera.focal);
+        // A point one unit right at depth one lands 100 pixels right of the center in both.
+        let pixel = |camera: &PinholeCamera| camera.principal_point[0] + camera.focal[0] * 1.0;
+        assert_eq!(pixel(&wider) - wider.principal_point[0], pixel(&camera) - camera.principal_point[0]);
     }
 
     #[test]

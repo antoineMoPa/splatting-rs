@@ -1,8 +1,11 @@
 // The Web Worker of index.html: fetches the Depth Anything 3 Small weights (once; the
 // Cache API keeps them), runs the network on the photos and sends back the result as a
-// run (splat.ply, cameras.json, input views). Messages in: {type: "reconstruct", photos:
-// [{name, bytes}], focal35mm}. Out: {type: "progress", text, fraction}, {type: "done", ...},
-// {type: "error", message}.
+// run (splat.ply, cameras.json, input views). Messages in, each answered by one message
+// out after any number of {type: "progress", text, fraction}:
+//   {type: "status"} -> {type: "status", cached}: whether the weights are in the cache
+//   {type: "load"} -> {type: "ready"}: fetch (or take from the cache) and load the weights
+//   {type: "reconstruct", photos: [{name, bytes}], focal35mm} -> {type: "done", ...}
+// Any failure answers {type: "error", message}. Reconstruct needs a load first.
 import init, * as da3 from "./pkg/instantsplat_web.js";
 
 const WEIGHTS_URL = "https://huggingface.co/depth-anything/DA3-SMALL/resolve/main/model.safetensors";
@@ -49,22 +52,29 @@ async function weights() {
   return bytes;
 }
 
-let ready = null;
-async function prepare() {
+async function weightsCached() {
+  const cache = await caches.open(WEIGHTS_CACHE);
+  return (await cache.match(WEIGHTS_URL)) !== undefined;
+}
+
+let loaded = false;
+async function load() {
+  if (loaded) return;
   await init();
   const started = performance.now();
   const bytes = await weights();
   const fetched = performance.now();
   progress(`loading ${(bytes.length / 1e6).toFixed(0)} MB of weights…`, 1);
   da3.load_da3(bytes);
+  loaded = true;
   progress(`weights: fetched in ${((fetched - started) / 1000).toFixed(1)} s, loaded in ${((performance.now() - fetched) / 1000).toFixed(1)} s`, 1);
 }
 
-onmessage = async ({ data }) => {
-  try {
-    if (data.type !== "reconstruct") throw new Error(`unknown message ${data.type}`);
-    ready ??= prepare();
-    await ready;
+const HANDLERS = {
+  status: async () => postMessage({ type: "status", cached: await weightsCached() }),
+  load: async () => { await load(); postMessage({ type: "ready" }); },
+  reconstruct: async (data) => {
+    if (!loaded) throw new Error("the model is not loaded: send a load message first");
     for (const { name, bytes } of data.photos) da3.add_input_photo(name, bytes);
     const result = da3.reconstruct(data.focal35mm ?? undefined, (text) => progress(text, networkFraction(text)));
     const views = [];
@@ -73,6 +83,14 @@ onmessage = async ({ data }) => {
     const message = { type: "done", ply, camerasJson: result.cameras_json(), views, report: result.report() };
     result.free();
     postMessage(message, [ply.buffer, ...views.map((view) => view.buffer)]);
+  },
+};
+
+onmessage = async ({ data }) => {
+  try {
+    const handler = HANDLERS[data.type];
+    if (!handler) throw new Error(`unknown message ${data.type}`);
+    await handler(data);
   } catch (error) {
     postMessage({ type: "error", message: error.message ?? String(error) });
   }

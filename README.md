@@ -33,6 +33,9 @@ cargo run --release -p instantsplat-rs -- fit photos/*.jpg --out runs/thing
 README has the details. Examples: `cargo run --release -p <crate> --example <name>`;
 see `mapanything-rs/examples/` and `instantsplat-rs/examples/`.
 
+The browser demo is live at https://antoinemopa.github.io/splatting-rs/. Locally: `npm install`,
+`npm run build`, `npm start`, then http://localhost:8787/.
+
 ## Acknowledgements
 
 - [MapAnything](https://github.com/facebookresearch/map-anything) by Meta

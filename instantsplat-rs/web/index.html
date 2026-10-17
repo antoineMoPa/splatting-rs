@@ -18,6 +18,9 @@
   .drop strong { display: block; font-size: 18px; }
   .drop span { color: var(--muted); font-size: 14px; }
   .drop input { display: none; }
+  .gate { text-align: center; padding: 12px 0 4px; }
+  .gate p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+  [hidden] { display: none !important; }
   progress { width: 100%; height: 8px; margin-top: 16px; accent-color: var(--accent); display: none; }
   progress.on { display: block; }
   #status { margin: 10px 0 0; min-height: 1.5em; color: var(--muted); font-size: 14px; }
@@ -40,10 +43,14 @@
 <body>
 <main>
   <h1>Photos to Gaussian Splat</h1>
-  <p class="lead">Turn a few photos of one object, taken from around it, into a Gaussian splat. Everything runs in this tab.</p>
+  <p class="lead">Turn object photos into a Gaussian splat in your browser.</p>
 
   <div class="card">
-    <label class="drop" id="drop">
+    <div class="gate" id="gate" hidden>
+      <p>Step one: the network that turns photos into points and cameras. One download, then your browser keeps it.</p>
+      <button id="download-model" class="primary">Download the 137 MB model</button>
+    </div>
+    <label class="drop" id="drop" hidden>
       <strong>Choose photos</strong>
       <span>or drop them here — 2 or more JPEG or PNG, 6 to 12 works well</span>
       <input type="file" id="input-photos" accept=".png,.jpg,.jpeg,image/png,image/jpeg" multiple>
@@ -74,15 +81,16 @@
     </div>
   </details>
 
-  <footer>The first run downloads the 137 MB network once, then it stays cached. Source: <a href="https://github.com/antoineMoPa/splatting-rs">splatting-rs</a>.</footer>
+  <footer>Nothing leaves your browser: the photos stay on your machine and the network is cached after one download. Source: <a href="https://github.com/antoineMoPa/splatting-rs">splatting-rs</a>.</footer>
 </main>
 <script type="module">
 import init, * as splat from "./pkg/instantsplat_web.js";
 
 // Steps run on every reconstruction before the result is shown.
 const TRAIN_STEPS = 300;
-// Progress bar shares: weights download, then the network, then training.
-const PROGRESS = { download: [0, 20], reconstruct: [20, 60], train: [60, 100] };
+// Progress bar shares: the model download is its own step; a reconstruction is the
+// network, then training.
+const PROGRESS = { download: [0, 100], reconstruct: [0, 50], train: [50, 100] };
 
 const status = document.getElementById("status");
 const progress = document.getElementById("progress");
@@ -93,6 +101,8 @@ const trainButton = document.getElementById("train");
 const downloadButton = document.getElementById("download");
 const inputPhotos = document.getElementById("input-photos");
 const drop = document.getElementById("drop");
+const gate = document.getElementById("gate");
+const downloadModelButton = document.getElementById("download-model");
 const params = new URLSearchParams(location.search);
 const say = (text) => { status.textContent = text; console.log(text); };
 const showProgress = (stage, fraction) => {
@@ -152,20 +162,45 @@ async function train(steps) {
 }
 
 // Depth Anything 3 runs in a worker (the network takes a while on one CPU thread and must
-// not freeze the page); its result is a run, loaded like any other.
+// not freeze the page); its result is a run, loaded like any other. One request at a time:
+// the answer to `ask` is the worker's next message that is not progress.
 const worker = new Worker("./worker.js", { type: "module" });
-let reconstruction = null;
+let request = null;
 worker.onmessage = ({ data }) => {
-  if (data.type === "progress") {
-    const downloading = /download/i.test(data.text);
-    showProgress(downloading ? "download" : "reconstruct", data.fraction ?? 0);
-    say(`${downloading ? "downloading the network" : "reconstructing"}: ${data.text}`);
-    return;
-  }
-  if (data.type === "error") { reconstruction.reject(new Error(data.message)); return; }
-  reconstruction.resolve(data);
+  if (data.type === "progress") { request.progress(data); return; }
+  if (data.type === "error") { request.reject(new Error(data.message)); return; }
+  request.resolve(data);
 };
-worker.onerror = (event) => { reconstruction?.reject(new Error(event.message)); };
+worker.onerror = (event) => { request?.reject(new Error(event.message)); };
+function ask(message, transfer, progress) {
+  if (request) throw new Error(`the worker is still busy with ${request.type}`);
+  return new Promise((resolve, reject) => {
+    request = { type: message.type, resolve, reject, progress };
+    worker.postMessage(message, transfer);
+  }).finally(() => { request = null; });
+}
+
+// Fetches (or takes from the cache) and loads the network, then shows the photo picker.
+async function loadModel() {
+  busy = true; downloadModelButton.disabled = true;
+  try {
+    await ask({ type: "load" }, [], ({ text, fraction }) => {
+      showProgress("download", fraction ?? 0);
+      say(`${/download/i.test(text) ? "downloading the model" : "loading the model"}: ${text}`);
+    });
+    hideProgress();
+    gate.hidden = true; drop.hidden = false;
+    say("ready: choose your photos.");
+  } catch (error) {
+    hideProgress();
+    downloadModelButton.disabled = false;
+    say(`error: ${error.message ?? error}`);
+    throw error;
+  } finally {
+    busy = false;
+  }
+}
+downloadModelButton.onclick = loadModel;
 
 async function photosToSplat(files) {
   if (busy) return;
@@ -176,13 +211,11 @@ async function photosToSplat(files) {
   try {
     const photos = [];
     for (const file of files) photos.push({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
-    showProgress("download", 0);
+    showProgress("reconstruct", 0);
     say(`reconstructing ${photos.length} photos…`);
-    const result = await new Promise((resolve, reject) => {
-      reconstruction = { resolve, reject };
-      // Focal length: the photos' EXIF when present, else the network's own estimate.
-      worker.postMessage({ type: "reconstruct", photos, focal35mm: null }, photos.map((photo) => photo.bytes.buffer));
-    });
+    // Focal length: the photos' EXIF when present, else the network's own estimate.
+    const result = await ask({ type: "reconstruct", photos, focal35mm: null }, photos.map((photo) => photo.bytes.buffer),
+      ({ text, fraction }) => { showProgress("reconstruct", fraction ?? 0); say(`reconstructing: ${text}`); });
     console.log(`reconstructed in ${seconds()} s: ${result.report}`);
     const count = await loadScene(new Uint8Array(result.ply), result.camerasJson);
     for (const [i, view] of result.views.entries()) addPhoto(cameraNames[i], new Uint8Array(view));
@@ -194,7 +227,6 @@ async function photosToSplat(files) {
     say(`error: ${error.message ?? error}`);
     throw error;
   } finally {
-    reconstruction = null;
     busy = false;
   }
 }
@@ -247,7 +279,10 @@ try {
   const [ply, cameras] = await Promise.all([fetchBytes(`${run}/splat.ply`), fetch(`${run}/cameras.json`).then((r) => r.text())]);
   const count = await loadScene(ply, cameras);
   for (const [i, name] of cameraNames.entries()) addPhoto(name, await fetchBytes(`${run}/input_view${i}.png`));
-  say(`example: ${count.toLocaleString()} Gaussians from ${cameraNames.length} photos of a rubber duck. Drag to look around, or choose your own photos.`);
+  say(`example: ${count.toLocaleString()} Gaussians from ${cameraNames.length} photos of a rubber duck. Drag to look around, or make your own.`);
+  // The model: offered as a download, or loaded right away when a previous visit cached it.
+  const { cached } = await ask({ type: "status" });
+  if (cached) await loadModel(); else gate.hidden = false;
 } catch (error) {
   say(`error: ${error.message ?? error}`);
   throw error;

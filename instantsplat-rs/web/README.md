@@ -1,21 +1,27 @@
 # instantsplat-rs in the browser
 
+Live at https://antoinemopa.github.io/splatting-rs/.
+
 Photos in, a trained Gaussian splat out, nothing but the browser: Depth Anything 3 Small
 (`../../depthanything3-rs`, 34 M parameters) predicts depth and cameras from the photos
 on candle's CPU backend compiled to wasm, one Gaussian per point (`init_from_points`,
 stride 2), then the rasterizer and the trainer of `..` optimize them on WebGPU, with the
-same WGSL kernels as the native build. Picking photos runs the whole chain, 300 training
-steps included; then drag to look around and download `splat.ply`. "Advanced" has the
-camera choice, more training and loading a `fit` run.
+same WGSL kernels as the native build. The page first asks for one click to download the
+137 MB model (skipped on later visits, the browser keeps it); then picking photos runs the
+whole chain, 300 training steps included; then drag to look around and download
+`splat.ply`. The view is rendered at the photos' height and at least 4:3 wide (a wider
+frame at the same focal length, so portrait photos still give a landscape view).
+"Advanced" has the camera choice, more training and loading a `fit` run.
 
 ![The page after reconstructing the six duck photos](demo.png)
 
 The network runs in a Web Worker (`worker.js`), so the page stays responsive; it reports
-each backbone block. The weights (137 MB, `model.safetensors` of
+each backbone block. The weights (`model.safetensors` of
 [depth-anything/DA3-SMALL](https://huggingface.co/depth-anything/DA3-SMALL)) are fetched
-from Hugging Face on the first reconstruction and kept in the browser's Cache API, so the
-next one starts at once. The focal length comes from the photos' EXIF when present, else
-from the network's own prediction.
+from Hugging Face behind the download button and kept in the browser's Cache API; the
+page asks the worker whether they are cached and, if so, loads them without asking. The
+focal length comes from the photos' EXIF when present, else from the network's own
+prediction.
 
 Measured in headless Chrome on an M5 for the six 3024x4032 duck photos (`.example/`,
 inputs at 378x504): weights download 7 s (then cached), preprocessing 0.14 s, Depth
@@ -39,12 +45,8 @@ wasm-bindgen --target web --out-dir pkg ../../target/wasm32-unknown-unknown/rele
 
 `.cargo/config.toml` turns on `simd128`; `Cargo.toml` patches candle to the upstream commit
 that makes its SIMD kernels compile for wasm32 (the native workspace keeps the release).
-Serve the crate directory and open the page in Chrome (WebGPU needs `localhost` or https):
-
-```
-python3 -m http.server 8787
-open http://localhost:8787/
-```
+Serve the crate directory with any static file server and open the page in Chrome (WebGPU
+needs `localhost` or https).
 
 ## As a site
 
@@ -52,10 +54,13 @@ open http://localhost:8787/
 photos) as the default scene:
 
 ```
-web/build_site.sh
-python3 -m http.server -d web/site 8787
+npm install
+npm run build
+npm start
 open http://localhost:8787/
 ```
+
+(`package.json` at the repository root.)
 
 `.github/workflows/pages.yml` at the repository root runs the same script on every push
 to `main` and deploys `site/` to GitHub Pages (enable Pages with source "GitHub Actions"

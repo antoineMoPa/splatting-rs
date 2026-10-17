@@ -27,6 +27,9 @@ use web_sys::ImageData;
 
 /// Photos whose aspect ratio is further than this from their camera's are refused.
 const MAX_ASPECT_RATIO_ERROR: f64 = 0.02;
+/// The preview is rendered at the photos' height and at least this wide for it (4:3):
+/// portrait photos get a landscape view that shows more of the scene at the sides.
+const PREVIEW_MIN_ASPECT_RATIO: f64 = 4.0 / 3.0;
 
 thread_local! {
     /// Requested once per page; leaked so that the trainer can borrow it for 'static.
@@ -48,9 +51,12 @@ enum Renderer {
     /// The splat as loaded (or as last trained), through its own rasterizer (whose bind
     /// groups keep the parameter buffer alive).
     Splat(Rasterizer),
-    /// Between `start_training` and `finish_training`: the trainer's parameters.
+    /// Between `start_training` and `finish_training`: the trainer's parameters, which
+    /// `preview` (at the preview size; the trainer's own rasterizer is at the photos')
+    /// renders live.
     Training {
         trainer: Trainer<'static>,
+        preview: Rasterizer,
         steps: usize,
         step: usize,
     },
@@ -77,12 +83,23 @@ fn put_scene(scene: Scene) {
     SCENE.with(|slot| *slot.borrow_mut() = Some(scene));
 }
 
-fn splat_renderer(cloud: &GaussianCloud, width: u32, height: u32) -> Renderer {
+/// The preview's image size for cameras of `camera`'s: see `PREVIEW_MIN_ASPECT_RATIO`.
+fn preview_size(camera: &PinholeCamera) -> (u32, u32) {
+    let min_width = (camera.height as f64 * PREVIEW_MIN_ASPECT_RATIO).round() as u32;
+    (camera.width.max(min_width), camera.height)
+}
+
+/// A rasterizer over `params` (`gaussian_count` packed Gaussians) at the preview size.
+fn preview_rasterizer(params: &wgpu::Buffer, gaussian_count: usize, (width, height): (u32, u32)) -> Rasterizer {
     let gpu = gpu();
-    let params = gpu.storage_buffer_from("params", &cloud.to_packed());
     // The rasterizer wants a ground truth to take losses against; none is taken here.
     let ground_truth = gpu.storage_buffer("ground truth", (width * height) as u64 * GROUND_TRUTH_STRIDE as u64 * 4);
-    Renderer::Splat(Rasterizer::new(gpu, &params, cloud.len(), width, height, &ground_truth, 1))
+    Rasterizer::new(gpu, params, gaussian_count, width, height, &ground_truth, 1)
+}
+
+fn splat_renderer(cloud: &GaussianCloud, preview: (u32, u32)) -> Renderer {
+    let params = gpu().storage_buffer_from("params", &cloud.to_packed());
+    Renderer::Splat(preview_rasterizer(&params, cloud.len(), preview))
 }
 
 /// Requests the WebGPU adapter and device; the adapter's name.
@@ -106,7 +123,7 @@ pub fn load_scene(ply: &[u8], cameras_json: &str) -> Result<usize, JsError> {
     for (name, camera) in &cameras {
         assert_eq!((camera.width, camera.height), (width, height), "{name}: every camera must have the same image size");
     }
-    let renderer = splat_renderer(&cloud, width, height);
+    let renderer = splat_renderer(&cloud, preview_size(&cameras[0].1));
     let count = cloud.len();
     put_scene(Scene {
         cloud,
@@ -139,16 +156,21 @@ fn rgba_over_background(rendered: &Rendered) -> Vec<u8> {
 }
 
 /// Camera `view` swung about the Gaussians' centroid (`PinholeCamera::orbited`), rendered
-/// over the display background.
+/// at the preview size over the display background.
 #[wasm_bindgen]
 pub async fn render(view: usize, yaw_degrees: f64, pitch_degrees: f64) -> Result<ImageData, JsError> {
     let scene = take_scene();
     assert!(view < scene.cameras.len(), "view {view} of {}", scene.cameras.len());
-    let camera = scene.cameras[view].1.orbited(scene.cloud.centroid(), yaw_degrees.to_radians(), pitch_degrees.to_radians());
-    let rendered = match &scene.renderer {
-        Renderer::Splat(rasterizer) => rasterizer.render_async(gpu(), &camera).await,
-        Renderer::Training { trainer, .. } => trainer.render_camera_async(&camera).await,
+    let camera = &scene.cameras[view].1;
+    let (width, height) = preview_size(camera);
+    let camera = camera
+        .orbited(scene.cloud.centroid(), yaw_degrees.to_radians(), pitch_degrees.to_radians())
+        .with_image_size(width, height);
+    let rasterizer = match &scene.renderer {
+        Renderer::Splat(rasterizer) => rasterizer,
+        Renderer::Training { preview, .. } => preview,
     };
+    let rendered = rasterizer.render_async(gpu(), &camera).await;
     put_scene(scene);
     let rgba = rgba_over_background(&rendered);
     ImageData::new_with_u8_clamped_array_and_sh(wasm_bindgen::Clamped(&rgba), rendered.width, rendered.height)
@@ -193,8 +215,10 @@ pub fn start_training(steps: usize) {
     assert!(scene.views.len() >= 2, "{} photos: training needs at least 2", scene.views.len());
     assert!(!matches!(scene.renderer, Renderer::Training { .. }), "already training");
     let trainer = Trainer::new(gpu(), &scene.cloud, &scene.views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
+    let preview = preview_rasterizer(trainer.params(), trainer.gaussian_count(), preview_size(&scene.cameras[0].1));
     scene.renderer = Renderer::Training {
         trainer,
+        preview,
         steps,
         step: 0,
     };
@@ -206,7 +230,7 @@ pub fn start_training(steps: usize) {
 #[wasm_bindgen]
 pub async fn train_steps(count: usize) -> String {
     let mut scene = take_scene();
-    let Renderer::Training { trainer, steps, step } = &mut scene.renderer else {
+    let Renderer::Training { trainer, steps, step, .. } = &mut scene.renderer else {
         panic!("not training: start_training first");
     };
     assert!(count > 0, "count");
@@ -233,8 +257,8 @@ pub async fn finish_training() -> String {
         panic!("not training");
     };
     assert_eq!(step, steps, "{step} of {steps} steps taken");
-    let (width, height) = (scene.cameras[0].1.width, scene.cameras[0].1.height);
-    let placeholder = splat_renderer(&scene.cloud, width, height);
+    let preview = preview_size(&scene.cameras[0].1);
+    let placeholder = splat_renderer(&scene.cloud, preview);
     let Renderer::Training { trainer, .. } = std::mem::replace(&mut scene.renderer, placeholder) else {
         unreachable!();
     };
@@ -247,7 +271,7 @@ pub async fn finish_training() -> String {
         report.prune
     );
     scene.cloud = report.cloud;
-    scene.renderer = splat_renderer(&scene.cloud, width, height);
+    scene.renderer = splat_renderer(&scene.cloud, preview);
     put_scene(scene);
     summary
 }

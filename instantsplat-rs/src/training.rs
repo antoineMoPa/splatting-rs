@@ -153,6 +153,16 @@ impl<'a> Trainer<'a> {
         self.extent
     }
 
+    /// The Gaussians' parameters as they are being optimized (`gaussian_count` of them,
+    /// packed as `GaussianCloud::to_packed`): another rasterizer can render them live.
+    pub fn params(&self) -> &wgpu::Buffer {
+        &self.params
+    }
+
+    pub fn gaussian_count(&self) -> usize {
+        self.gaussian_count
+    }
+
     pub fn view_count(&self) -> usize {
         self.initial_cameras.len()
     }
