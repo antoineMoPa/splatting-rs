@@ -15,7 +15,11 @@ use serde_json::Value;
 use crate::camera::PinholeCamera;
 
 pub fn write_cameras_json(path: &Path, cameras: &[(String, PinholeCamera)]) -> Result<()> {
-    let mut out = BufWriter::new(File::create(path)?);
+    write_cameras_json_to(BufWriter::new(File::create(path)?), cameras)
+}
+
+/// `write_cameras_json` to any writer (memory, in the browser).
+pub fn write_cameras_json_to(mut out: impl Write, cameras: &[(String, PinholeCamera)]) -> Result<()> {
     writeln!(out, "[")?;
     for (index, (name, camera)) in cameras.iter().enumerate() {
         let rows: Vec<String> = (0..3)
@@ -53,39 +57,45 @@ pub fn write_cameras_json(path: &Path, cameras: &[(String, PinholeCamera)]) -> R
 /// runs, other tools) are refused: the principal point cannot be guessed.
 pub fn read_cameras_json(path: &Path) -> Result<Vec<(String, PinholeCamera)>> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let entries: Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let entries = entries.as_array().with_context(|| format!("{}: not a JSON array", path.display()))?;
+    parse_cameras_json(&text, &path.display().to_string())
+}
+
+/// `read_cameras_json` from the file's text (a fetched file in a browser); `label` names it
+/// in errors.
+pub fn parse_cameras_json(text: &str, label: &str) -> Result<Vec<(String, PinholeCamera)>> {
+    let entries: Value = serde_json::from_str(text).with_context(|| format!("parsing {label}"))?;
+    let entries = entries.as_array().with_context(|| format!("{label}: not a JSON array"))?;
     entries
         .iter()
         .map(|entry| {
             let field = |key: &str| -> Result<&Value> {
                 entry
                     .get(key)
-                    .with_context(|| format!("{}: a camera has no \"{key}\" (written by an older version?)", path.display()))
+                    .with_context(|| format!("{label}: a camera has no \"{key}\" (written by an older version?)"))
             };
             let number = |key: &str| -> Result<f64> {
-                field(key)?.as_f64().with_context(|| format!("{}: \"{key}\" is not a number", path.display()))
+                field(key)?.as_f64().with_context(|| format!("{label}: \"{key}\" is not a number"))
             };
             let numbers = |value: &Value, count: usize| -> Result<Vec<f64>> {
                 let values: Vec<f64> = value
                     .as_array()
                     .and_then(|values| values.iter().map(Value::as_f64).collect())
-                    .with_context(|| format!("{}: expected an array of numbers", path.display()))?;
-                anyhow::ensure!(values.len() == count, "{}: expected {count} numbers", path.display());
+                    .with_context(|| format!("{label}: expected an array of numbers"))?;
+                anyhow::ensure!(values.len() == count, "{label}: expected {count} numbers");
                 Ok(values)
             };
             let name = field("img_name")?
                 .as_str()
-                .with_context(|| format!("{}: \"img_name\" is not a string", path.display()))?
+                .with_context(|| format!("{label}: \"img_name\" is not a string"))?
                 .to_string();
             let position = numbers(field("position")?, 3)?;
             let rows: Vec<Vec<f64>> = field("rotation")?
                 .as_array()
-                .with_context(|| format!("{}: \"rotation\" is not an array", path.display()))?
+                .with_context(|| format!("{label}: \"rotation\" is not an array"))?
                 .iter()
                 .map(|row| numbers(row, 3))
                 .collect::<Result<_>>()?;
-            anyhow::ensure!(rows.len() == 3, "{}: \"rotation\" needs 3 rows", path.display());
+            anyhow::ensure!(rows.len() == 3, "{label}: \"rotation\" needs 3 rows");
             Ok((
                 name,
                 PinholeCamera {

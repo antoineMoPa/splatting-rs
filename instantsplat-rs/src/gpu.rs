@@ -1,5 +1,11 @@
 //! wgpu device setup and the few buffer helpers every kernel needs. Compute only: Metal
-//! natively, WebGPU in a browser, with the same WGSL.
+//! natively, WebGPU in a browser, with the same WGSL. Read backs are async because a
+//! browser cannot block on the GPU; natively `read_back` wraps them in `pollster::block_on`.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use bytemuck::Pod;
 use wgpu::util::DeviceExt;
@@ -7,6 +13,7 @@ use wgpu::util::DeviceExt;
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub adapter_info: wgpu::AdapterInfo,
 }
 
 /// Largest buffer the kernels may allocate; the adapter must allow it.
@@ -45,12 +52,13 @@ impl Gpu {
             })
             .await
             .expect("wgpu device");
-        println!(
-            "wgpu adapter: {} ({:?})",
-            adapter.get_info().name,
-            adapter.get_info().backend
-        );
-        Self { device, queue }
+        let adapter_info = adapter.get_info();
+        println!("wgpu adapter: {} ({:?})", adapter_info.name, adapter_info.backend);
+        Self {
+            device,
+            queue,
+            adapter_info,
+        }
     }
 
     /// Zeroed storage buffer of `bytes` bytes, readable and writable by kernels and copies.
@@ -172,22 +180,57 @@ impl Gpu {
         let mut encoder = self.encoder();
         encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, bytes);
         self.submit(encoder);
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let mapped = MapReady::default();
+        let callback = mapped.clone();
         staging
             .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                sender.send(result).expect("map callback");
-            });
+            .map_async(wgpu::MapMode::Read, move |result| callback.set(result));
+        // Natively this returns once the GPU is done and the map callback has run; in a
+        // browser the device is polled by the page's event loop and this returns at once.
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("waiting for the GPU");
-        receiver
-            .recv()
-            .expect("map callback")
-            .expect("mapping the read back buffer");
+        mapped.await.expect("mapping the read back buffer");
         let data = bytemuck::cast_slice(&staging.slice(..).get_mapped_range().expect("mapped")).to_vec();
         staging.unmap();
         data
+    }
+}
+
+/// Resolves once a `map_async` callback has run: the callback stores the result and wakes
+/// whoever awaits.
+#[derive(Clone, Default)]
+struct MapReady(Arc<Mutex<MapState>>);
+
+#[derive(Default)]
+struct MapState {
+    result: Option<Result<(), wgpu::BufferAsyncError>>,
+    waker: Option<Waker>,
+}
+
+impl MapReady {
+    fn set(&self, result: Result<(), wgpu::BufferAsyncError>) {
+        let mut state = self.0.lock().expect("map state");
+        assert!(state.result.is_none(), "map callback ran twice");
+        state.result = Some(result);
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+impl Future for MapReady {
+    type Output = Result<(), wgpu::BufferAsyncError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut state = self.0.lock().expect("map state");
+        match state.result.take() {
+            Some(result) => Poll::Ready(result),
+            None => {
+                state.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
     }
 }
 

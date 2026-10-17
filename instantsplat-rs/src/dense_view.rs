@@ -30,6 +30,16 @@ impl DenseView {
         })
     }
 
+    /// The colors with the foreground mask as alpha: `training_frames::training_view_from_image`
+    /// reads it back as the same view.
+    pub fn to_rgba8(&self) -> image::RgbaImage {
+        image::RgbaImage::from_fn(self.width as u32, self.height as u32, |x, y| {
+            let pixel = y as usize * self.width + x as usize;
+            let rgb = [0, 1, 2].map(|c| (self.rgb[pixel * 3 + c] * 255.0).round() as u8);
+            image::Rgba([rgb[0], rgb[1], rgb[2], if self.foreground[pixel] { 255 } else { 0 }])
+        })
+    }
+
     /// Panics on inconsistent sizes.
     pub fn check(&self) {
         let count = self.pixel_count();

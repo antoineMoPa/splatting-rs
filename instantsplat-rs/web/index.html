@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Photos to Gaussian Splats</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<style>
+  :root { --ink: #1d1d1b; --muted: #6b6a66; --line: #e2e0db; --accent: #2a63d4; --bg: #f6f5f2; --card: #fff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+  .drop { display: block; border: 2px dashed #c9c6bf; border-radius: 12px; padding: 28px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: #eef3fd; }
+  .drop strong { display: block; font-size: 18px; }
+  .drop span { color: var(--muted); font-size: 14px; }
+  .drop input { display: none; }
+  progress { width: 100%; height: 8px; margin-top: 16px; accent-color: var(--accent); display: none; }
+  progress.on { display: block; }
+  #status { margin: 10px 0 0; min-height: 1.5em; color: var(--muted); font-size: 14px; }
+  .view { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  canvas { max-width: 100%; max-height: 70vh; border-radius: 12px; background: #808080; cursor: grab; touch-action: none; box-shadow: 0 10px 30px rgba(0,0,0,.12); }
+  canvas:active { cursor: grabbing; }
+  .hint { color: var(--muted); font-size: 14px; }
+  button { font: inherit; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  details { color: var(--muted); font-size: 14px; }
+  details summary { cursor: pointer; }
+  details .row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 10px; }
+  details input[type=number] { width: 6em; font: inherit; padding: 4px 6px; }
+  details select { font: inherit; padding: 4px 6px; max-width: 100%; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 24px; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Photos to Gaussian Splat</h1>
+  <p class="lead">Turn a few photos of one object, taken from around it, into a Gaussian splat. Everything runs in this tab.</p>
+
+  <div class="card">
+    <label class="drop" id="drop">
+      <strong>Choose photos</strong>
+      <span>or drop them here — 2 or more JPEG or PNG, 6 to 12 works well</span>
+      <input type="file" id="input-photos" accept=".png,.jpg,.jpeg,image/png,image/jpeg" multiple>
+    </label>
+    <progress id="progress" max="100" value="0"></progress>
+    <div id="status">loading…</div>
+  </div>
+
+  <div class="card view">
+    <canvas id="canvas" width="1" height="1"></canvas>
+    <div class="hint">drag to look around</div>
+    <button id="download" class="primary" disabled>Download .ply</button>
+  </div>
+
+  <details class="card">
+    <summary>Advanced</summary>
+    <div class="row">
+      <label>view from photo <select id="view"></select></label>
+    </div>
+    <div class="row">
+      <label>train <input type="number" id="steps" value="300" min="1"> more steps</label>
+      <button id="train" disabled>Train</button>
+    </div>
+    <div class="row">
+      <label>splat.ply <input type="file" id="ply" accept=".ply"></label>
+      <label>cameras.json <input type="file" id="cameras" accept=".json"></label>
+      <button id="load-files">Load a run</button>
+    </div>
+  </details>
+
+  <footer>The first run downloads the 137 MB network once, then it stays cached. Source: <a href="https://github.com/antoineMoPa/splatting-rs">splatting-rs</a>.</footer>
+</main>
+<script type="module">
+import init, * as splat from "./pkg/instantsplat_web.js";
+
+// Steps run on every reconstruction before the result is shown.
+const TRAIN_STEPS = 300;
+// Progress bar shares: weights download, then the network, then training.
+const PROGRESS = { download: [0, 20], reconstruct: [20, 60], train: [60, 100] };
+
+const status = document.getElementById("status");
+const progress = document.getElementById("progress");
+const canvas = document.getElementById("canvas");
+const context = canvas.getContext("2d");
+const viewSelect = document.getElementById("view");
+const trainButton = document.getElementById("train");
+const downloadButton = document.getElementById("download");
+const inputPhotos = document.getElementById("input-photos");
+const drop = document.getElementById("drop");
+const params = new URLSearchParams(location.search);
+const say = (text) => { status.textContent = text; console.log(text); };
+const showProgress = (stage, fraction) => {
+  const [from, to] = PROGRESS[stage];
+  progress.value = from + (to - from) * Math.min(1, Math.max(0, fraction));
+  progress.classList.add("on");
+};
+const hideProgress = () => { progress.classList.remove("on"); progress.value = 0; };
+
+let yaw = 0, pitch = 0, rendering = false, wanted = false, cameraNames = [], photoCount = 0, busy = false;
+
+async function draw() {
+  if (rendering) { wanted = true; return; }
+  rendering = true;
+  do {
+    wanted = false;
+    const image = await splat.render(viewSelect.selectedIndex, yaw, pitch);
+    canvas.width = image.width; canvas.height = image.height;
+    context.putImageData(image, 0, 0);
+  } while (wanted);
+  rendering = false;
+}
+
+async function loadScene(ply, camerasJson) {
+  const count = splat.load_scene(ply, camerasJson);
+  cameraNames = splat.camera_names();
+  viewSelect.replaceChildren(...cameraNames.map((name, i) => new Option(`${i}: ${name}`, i)));
+  photoCount = 0;
+  trainButton.disabled = true;
+  downloadButton.disabled = false;
+  yaw = 0; pitch = 0;
+  await draw();
+  return count;
+}
+
+function addPhoto(name, bytes) {
+  photoCount = splat.add_photo(name, bytes);
+  trainButton.disabled = photoCount < 2;
+}
+
+async function train(steps) {
+  trainButton.disabled = true; viewSelect.disabled = true; canvas.style.cursor = "wait";
+  const started = performance.now();
+  splat.start_training(steps);
+  let done = 0;
+  while (done < steps) {
+    const line = await splat.train_steps(Math.min(10, steps - done));
+    done = Number(line.match(/^step (\d+)/)[1]);
+    showProgress("train", done / steps);
+    say(`refining: step ${done} of ${steps} (${((performance.now() - started) / 1000).toFixed(0)} s)`);
+    await draw();
+  }
+  const summary = await splat.finish_training();
+  console.log(`trained: ${summary}`);
+  await draw();
+  trainButton.disabled = false; viewSelect.disabled = false; canvas.style.cursor = "grab";
+}
+
+// Depth Anything 3 runs in a worker (the network takes a while on one CPU thread and must
+// not freeze the page); its result is a run, loaded like any other.
+const worker = new Worker("./worker.js", { type: "module" });
+let reconstruction = null;
+worker.onmessage = ({ data }) => {
+  if (data.type === "progress") {
+    const downloading = /download/i.test(data.text);
+    showProgress(downloading ? "download" : "reconstruct", data.fraction ?? 0);
+    say(`${downloading ? "downloading the network" : "reconstructing"}: ${data.text}`);
+    return;
+  }
+  if (data.type === "error") { reconstruction.reject(new Error(data.message)); return; }
+  reconstruction.resolve(data);
+};
+worker.onerror = (event) => { reconstruction?.reject(new Error(event.message)); };
+
+async function photosToSplat(files) {
+  if (busy) return;
+  if (files.length < 2) { say("pick at least 2 photos"); return; }
+  busy = true; drop.classList.remove("over");
+  const started = performance.now();
+  const seconds = () => ((performance.now() - started) / 1000).toFixed(0);
+  try {
+    const photos = [];
+    for (const file of files) photos.push({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
+    showProgress("download", 0);
+    say(`reconstructing ${photos.length} photos…`);
+    const result = await new Promise((resolve, reject) => {
+      reconstruction = { resolve, reject };
+      // Focal length: the photos' EXIF when present, else the network's own estimate.
+      worker.postMessage({ type: "reconstruct", photos, focal35mm: null }, photos.map((photo) => photo.bytes.buffer));
+    });
+    console.log(`reconstructed in ${seconds()} s: ${result.report}`);
+    const count = await loadScene(new Uint8Array(result.ply), result.camerasJson);
+    for (const [i, view] of result.views.entries()) addPhoto(cameraNames[i], new Uint8Array(view));
+    await train(TRAIN_STEPS);
+    hideProgress();
+    say(`done in ${seconds()} s: ${count.toLocaleString()} Gaussians from ${photos.length} photos. Drag to look around.`);
+  } catch (error) {
+    hideProgress();
+    say(`error: ${error.message ?? error}`);
+    throw error;
+  } finally {
+    reconstruction = null;
+    busy = false;
+  }
+}
+
+inputPhotos.onchange = () => photosToSplat([...inputPhotos.files]);
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => { e.preventDefault(); photosToSplat([...e.dataTransfer.files]); };
+
+document.getElementById("load-files").onclick = async () => {
+  const [ply] = document.getElementById("ply").files, [cameras] = document.getElementById("cameras").files;
+  if (!ply || !cameras) { say("pick a splat.ply and a cameras.json"); return; }
+  const count = await loadScene(new Uint8Array(await ply.arrayBuffer()), await cameras.text());
+  say(`loaded ${count.toLocaleString()} Gaussians`);
+};
+trainButton.onclick = async () => {
+  if (busy) return;
+  busy = true;
+  try { await train(Number(document.getElementById("steps").value)); hideProgress(); say("refined. Drag to look around."); }
+  finally { busy = false; }
+};
+downloadButton.onclick = () => {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([splat.splat_ply()], { type: "application/octet-stream" }));
+  link.download = "splat.ply";
+  link.click();
+};
+viewSelect.onchange = () => { yaw = 0; pitch = 0; draw(); };
+let drag = null;
+canvas.onpointerdown = (e) => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); };
+canvas.onpointerup = () => { drag = null; };
+canvas.onpointermove = (e) => {
+  if (!drag || viewSelect.disabled) return;
+  yaw += (e.clientX - drag.x) * 0.3; pitch += (e.clientY - drag.y) * 0.3;
+  drag = { x: e.clientX, y: e.clientY };
+  draw();
+};
+
+async function fetchBytes(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url}: ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+try {
+  await init();
+  console.log(`WebGPU: ${await splat.init_gpu()}`);
+  // The example run shipped with the page, unless ?run= names another directory.
+  const run = params.get("run") ?? "example";
+  const [ply, cameras] = await Promise.all([fetchBytes(`${run}/splat.ply`), fetch(`${run}/cameras.json`).then((r) => r.text())]);
+  const count = await loadScene(ply, cameras);
+  for (const [i, name] of cameraNames.entries()) addPhoto(name, await fetchBytes(`${run}/input_view${i}.png`));
+  say(`example: ${count.toLocaleString()} Gaussians from ${cameraNames.length} photos of a rubber duck. Drag to look around, or choose your own photos.`);
+} catch (error) {
+  say(`error: ${error.message ?? error}`);
+  throw error;
+}
+</script>
+</body>
+</html>

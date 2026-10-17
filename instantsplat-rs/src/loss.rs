@@ -27,8 +27,8 @@ pub struct LossWeights {
     pub alpha: f32,
 }
 
-/// 3DGS: (1 - 0.2) L1 + 0.2 (1 - SSIM); plus the alpha term at 1.0 (the Brush
-/// `--match-alpha-weight 1` that gave the solid garment in `brush_cutout_alpha`).
+/// 3DGS: (1 - 0.2) L1 + 0.2 (1 - SSIM); plus the alpha term at 1.0 (at 0.1, Brush's
+/// default, cutout splats come out semi-transparent).
 pub const LOSS_WEIGHTS: LossWeights = LossWeights {
     l1: 0.8,
     dssim: 0.2,

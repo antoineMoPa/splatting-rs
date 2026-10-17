@@ -1,6 +1,8 @@
-//! Training views from posed photos (the `refine` stage): each RGBA cutout frame is
-//! composited on the rasterizer's background, shrunk to the optimization resolution, and
-//! paired with its camera scaled the same way. Alpha marks the foreground.
+//! Training views from posed photos (the `refine` stage, the browser demo): each RGBA
+//! cutout frame is composited on the rasterizer's background, shrunk to the optimization
+//! resolution, and paired with its camera scaled the same way. Alpha marks the foreground.
+//! A `fit` run's `input_view{i}.png` (RGBA, at the camera's size) comes back as the view
+//! it was written from.
 
 use std::path::Path;
 
@@ -17,9 +19,10 @@ pub const BACKGROUND_RGB8: [u8; 3] = [128, 128, 128];
 /// Pixels with at least this alpha (after resizing) are foreground, as mapanything-rs.
 pub const FOREGROUND_MIN_ALPHA: u8 = 128;
 
-/// `camera` is scaled by the same per-axis factors as the image: pixel (i, j) of the
-/// result sees what the camera's `(i + 0.5) / factor - 0.5` saw.
-fn scale_camera(camera: &PinholeCamera, width: u32, height: u32) -> PinholeCamera {
+/// `camera` for its image resized to `width` x `height`: scaled by the same per-axis
+/// factors as the image, so pixel (i, j) of the result sees what the camera's
+/// `(i + 0.5) / factor - 0.5` saw.
+pub fn scale_camera(camera: &PinholeCamera, width: u32, height: u32) -> PinholeCamera {
     let factor = [width as f64 / camera.width as f64, height as f64 / camera.height as f64];
     PinholeCamera {
         focal: [camera.focal[0] * factor[0], camera.focal[1] * factor[1]],
@@ -53,27 +56,41 @@ pub fn training_size(camera: &PinholeCamera, training_height: u32, resolution_sc
 }
 
 /// Loads `path`, which must be `camera.width` x `camera.height` (the image COLMAP
-/// registered), and builds the view at `width` x `height`. Images without alpha are all
-/// foreground. `points` and `conf` are not used by the optimization and are left at zero.
-pub fn load_training_view(path: &Path, camera: &PinholeCamera, (width, height): (u32, u32)) -> Result<DenseView> {
+/// registered), and builds the view at `width` x `height` (`training_view_from_image`).
+pub fn load_training_view(path: &Path, camera: &PinholeCamera, size: (u32, u32)) -> Result<DenseView> {
     let image = ImageReader::open(path)?
         .with_guessed_format()?
         .decode()
         .with_context(|| format!("decoding {}", path.display()))?;
+    training_view_from_image(image, &path.display().to_string(), camera, size)
+}
+
+/// The view at `width` x `height` of `image` (`camera.width` x `camera.height`, named
+/// `label` in errors) seen by `camera`. Images without alpha are all foreground. `points`
+/// and `conf` are not used by the optimization and are left at zero.
+pub fn training_view_from_image(
+    image: DynamicImage,
+    label: &str,
+    camera: &PinholeCamera,
+    (width, height): (u32, u32),
+) -> Result<DenseView> {
     ensure!(
         image.dimensions() == (camera.width, camera.height),
-        "{} is {}x{}, its camera is {}x{}",
-        path.display(),
+        "{label} is {}x{}, its camera is {}x{}",
         image.width(),
         image.height(),
         camera.width,
         camera.height
     );
     let composited = composite_on_background(image.to_rgba8());
-    let filter = if width < camera.width { FilterType::Lanczos3 } else { FilterType::CatmullRom };
-    let resized = DynamicImage::ImageRgba8(composited).resize_exact(width, height, filter).to_rgba8();
+    let resized = if (width, height) == (camera.width, camera.height) {
+        composited
+    } else {
+        let filter = if width < camera.width { FilterType::Lanczos3 } else { FilterType::CatmullRom };
+        DynamicImage::ImageRgba8(composited).resize_exact(width, height, filter).to_rgba8()
+    };
     let foreground: Vec<bool> = resized.pixels().map(|pixel| pixel[3] >= FOREGROUND_MIN_ALPHA).collect();
-    ensure!(foreground.contains(&true), "{} has no foreground pixel", path.display());
+    ensure!(foreground.contains(&true), "{label} has no foreground pixel");
     let rgb: Vec<f32> = resized
         .pixels()
         .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]].map(|c| c as f32 / 255.0))
@@ -135,6 +152,40 @@ mod tests {
         }
         assert_eq!(view.foreground.iter().filter(|&&f| f).count(), 100);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_views_rgba_png_comes_back_as_the_view() {
+        let (width, height) = (6usize, 4usize);
+        let camera = PinholeCamera {
+            rotation: Matrix3::identity(),
+            translation: Vector3::zeros(),
+            focal: [10.0, 10.0],
+            principal_point: [2.5, 1.5],
+            width: width as u32,
+            height: height as u32,
+        };
+        let gray = 128.0 / 255.0;
+        let foreground: Vec<bool> = (0..width * height).map(|i| i % 3 != 0).collect();
+        let rgb: Vec<f32> = (0..width * height)
+            .flat_map(|i| if foreground[i] { [(i % 7) as f32 / 6.0, 0.25, 1.0 - (i % 5) as f32 / 4.0] } else { [gray; 3] })
+            .collect();
+        let view = DenseView {
+            width,
+            height,
+            points: vec![[0.0; 3]; width * height],
+            conf: vec![0.0; width * height],
+            foreground: foreground.clone(),
+            rgb: rgb.clone(),
+            camera: camera.clone(),
+        };
+        let back = training_view_from_image(DynamicImage::ImageRgba8(view.to_rgba8()), "view", &camera, (width as u32, height as u32)).unwrap();
+        assert_eq!(back.foreground, foreground);
+        for (a, b) in back.rgb.iter().zip(&rgb) {
+            assert!((a - b).abs() <= 0.5 / 255.0 + 1e-6, "{a} vs {b}");
+        }
+        assert_eq!(back.camera.focal, camera.focal);
+        assert_eq!(back.camera.principal_point, camera.principal_point);
     }
 
     #[test]

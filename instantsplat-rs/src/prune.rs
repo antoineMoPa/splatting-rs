@@ -18,8 +18,8 @@ pub struct ScaleLimits {
 }
 
 /// 3DGS prunes Gaussians above 0.1 of the extent when densifying; the spikes to remove
-/// here are far thinner than that, so the cap is tighter: 2% of the extent is about 4 cm
-/// on the fleece scene, 10-20 times the starting scale of a Gaussian.
+/// here are far thinner than that, so the cap is tighter: 2% of the extent is 10-20 times
+/// the starting scale of a Gaussian on a capture that walks around an object.
 pub const SCALE_LIMITS: ScaleLimits = ScaleLimits {
     max_anisotropy: 10.0,
     max_scale_extent_fraction: 0.02,

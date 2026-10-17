@@ -2,12 +2,16 @@
 
 ![Six photos of a rubber duck, and the Gaussian splat made from them](docs/duck_splat.png)
 
-3D reconstruction from photos, in Rust, on a Mac. Two crates:
+3D reconstruction from photos, in Rust, on a Mac. Three crates:
 
 - `mapanything-rs/`: photos → coloured point cloud, with Meta's MapAnything network on
   candle (Metal). One forward pass, no camera poses needed.
-- `instantsplat-rs/`: photos → Gaussian splat, after InstantSplat. Uses `mapanything-rs` for
-  the points and cameras, then optimises Gaussians with its own wgpu/WGSL rasterizer.
+- `depthanything3-rs/`: photos → depth maps and cameras, with ByteDance's Depth Anything 3
+  Small on candle (Metal). 137 MB of weights instead of 4.9 GB: the browser-sized stage 1.
+- `instantsplat-rs/`: photos → Gaussian splat, after InstantSplat. Uses `mapanything-rs` (or
+  `depthanything3-rs` with `--network da3-small`) for the points and cameras, then optimises
+  Gaussians with its own wgpu/WGSL rasterizer. Its `web/` demo does the whole thing in the
+  browser: Depth Anything 3 Small on wasm, the optimisation on WebGPU, no server.
 
 ## Setup
 
@@ -25,7 +29,8 @@ cargo run --release -p mapanything-rs -- photo1.jpg photo2.jpg photo3.jpg --out 
 cargo run --release -p instantsplat-rs -- fit photos/*.jpg --out runs/thing
 ```
 
-Each crate's README has the details. Examples: `cargo run --release -p <crate> --example <name>`;
+`--network da3-small` after `fit` swaps MapAnything for Depth Anything 3 Small. Each crate's
+README has the details. Examples: `cargo run --release -p <crate> --example <name>`;
 see `mapanything-rs/examples/` and `instantsplat-rs/examples/`.
 
 ## Acknowledgements

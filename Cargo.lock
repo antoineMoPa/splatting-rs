@@ -546,6 +546,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "depthanything3-rs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "candle-nn",
+ "clap",
+ "hf-hub",
+ "image",
+ "mapanything-rs",
+ "nalgebra",
+ "web-time",
+]
+
+[[package]]
 name = "derive_builder"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1550,6 +1565,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "clap",
+ "depthanything3-rs",
  "hf-hub",
  "image",
  "mapanything-rs",
@@ -1557,6 +1573,7 @@ dependencies = [
  "pollster",
  "rand 0.9.5",
  "serde_json",
+ "web-time",
  "wgpu",
 ]
 

@@ -4,14 +4,12 @@
 //! One instance renders one image size against one set of ground-truth views. The
 //! backward pass also sums the gradient with respect to the camera (`CameraGradient`).
 //!
-//! The kernels and their encoding build for wasm32 too; the blocking read backs (`read_*`,
-//! `render`) are native only, a browser needs async equivalents.
+//! The read backs (`read_*_async`, `render_async`) are async so that a browser can await
+//! them; the blocking `read_*` and `render` are native-only `pollster::block_on` wrappers.
 
 use bytemuck::{Pod, Zeroable};
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::camera::CameraGradient;
-use crate::camera::PinholeCamera;
+use crate::camera::{CameraGradient, PinholeCamera};
 use crate::gpu::{Gpu, dispatch, dispatch_indirect, workgroups};
 use crate::loss::{GROUND_TRUTH_STRIDE, LOSS_WEIGHTS, LossTerms, LossView};
 use crate::shaders::{self, CAMERA_GRAD_STRIDE, GRAD_STRIDE, PARAM_STRIDE, PROJECTED_BYTES, TILE};
@@ -462,52 +460,75 @@ impl Rasterizer {
         gpu.write(&self.image, rgbt);
     }
 
+    pub async fn read_loss_gradient_async(&self, gpu: &Gpu) -> Vec<f32> {
+        gpu.read_back_async(&self.loss_gradient, self.pixel_count() * 4).await
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_loss_gradient(&self, gpu: &Gpu) -> Vec<f32> {
-        gpu.read_back(&self.loss_gradient, self.pixel_count() * 4)
+        pollster::block_on(self.read_loss_gradient_async(gpu))
     }
 
     pub fn param_gradients(&self) -> &wgpu::Buffer {
         &self.param_gradients
     }
 
+    pub async fn read_param_gradients_async(&self, gpu: &Gpu) -> Vec<f32> {
+        gpu.read_back_async(&self.param_gradients, self.gaussian_count * PARAM_STRIDE).await
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_param_gradients(&self, gpu: &Gpu) -> Vec<f32> {
-        gpu.read_back(&self.param_gradients, self.gaussian_count * PARAM_STRIDE)
+        pollster::block_on(self.read_param_gradients_async(gpu))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     /// The camera gradient of the last `encode_backward`.
-    pub fn read_camera_gradient(&self, gpu: &Gpu) -> CameraGradient {
-        gpu.read_back::<CameraGradient>(&self.camera_gradient, 1)[0]
+    pub async fn read_camera_gradient_async(&self, gpu: &Gpu) -> CameraGradient {
+        gpu.read_back_async::<CameraGradient>(&self.camera_gradient, 1).await[0]
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn read_image(&self, gpu: &Gpu) -> Rendered {
+    pub fn read_camera_gradient(&self, gpu: &Gpu) -> CameraGradient {
+        pollster::block_on(self.read_camera_gradient_async(gpu))
+    }
+
+    pub async fn read_image_async(&self, gpu: &Gpu) -> Rendered {
         Rendered {
             width: self.width,
             height: self.height,
-            rgbt: gpu.read_back(&self.image, self.pixel_count() * 4),
+            rgbt: gpu.read_back_async(&self.image, self.pixel_count() * 4).await,
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_image(&self, gpu: &Gpu) -> Rendered {
+        pollster::block_on(self.read_image_async(gpu))
+    }
+
     /// Per pixel, the loss terms of the last `encode_loss`: L1 rgb, alpha error, 1 - SSIM,
     /// weighted total (unweighted means are the loss).
+    pub async fn read_pixel_loss_async(&self, gpu: &Gpu) -> Vec<f32> {
+        gpu.read_back_async(&self.pixel_loss, self.pixel_count() * 4).await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn read_pixel_loss(&self, gpu: &Gpu) -> Vec<f32> {
-        gpu.read_back(&self.pixel_loss, self.pixel_count() * 4)
+        pollster::block_on(self.read_pixel_loss_async(gpu))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     /// Means over the pixels of the loss terms of the last `encode_loss`.
-    pub fn read_loss(&self, gpu: &Gpu) -> LossTerms {
-        LossTerms::from_pixel_loss(&self.read_pixel_loss(gpu))
+    pub async fn read_loss_async(&self, gpu: &Gpu) -> LossTerms {
+        LossTerms::from_pixel_loss(&self.read_pixel_loss_async(gpu).await)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_loss(&self, gpu: &Gpu) -> LossTerms {
+        pollster::block_on(self.read_loss_async(gpu))
+    }
+
     /// Panics when the last forward pass had more (Gaussian, tile) pairs than the list holds.
-    pub fn read_intersections(&self, gpu: &Gpu) -> IntersectionMeta {
-        let meta: Vec<IntersectionMeta> = gpu.read_back(&self.meta, 1);
+    pub async fn read_intersections_async(&self, gpu: &Gpu) -> IntersectionMeta {
+        let meta: Vec<IntersectionMeta> = gpu.read_back_async(&self.meta, 1).await;
         assert_eq!(
             meta[0].overflow, 0,
             "intersection list overflow: more than {} (Gaussian, tile) pairs; Gaussians are too large for the image",
@@ -517,13 +538,22 @@ impl Rasterizer {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_intersections(&self, gpu: &Gpu) -> IntersectionMeta {
+        pollster::block_on(self.read_intersections_async(gpu))
+    }
+
     /// Renders `camera` and reads the image back.
-    pub fn render(&self, gpu: &Gpu, camera: &PinholeCamera) -> Rendered {
+    pub async fn render_async(&self, gpu: &Gpu, camera: &PinholeCamera) -> Rendered {
         self.set_camera(gpu, camera);
         let mut encoder = gpu.encoder();
         self.encode_forward(&mut encoder);
         gpu.submit(encoder);
-        self.read_intersections(gpu);
-        self.read_image(gpu)
+        self.read_intersections_async(gpu).await;
+        self.read_image_async(gpu).await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render(&self, gpu: &Gpu, camera: &PinholeCamera) -> Rendered {
+        pollster::block_on(self.render_async(gpu, camera))
     }
 }

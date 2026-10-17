@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use instantsplat_rs::evaluate_against_colmap::EvaluationSettings;
 use instantsplat_rs::fit::{FitSettings, run_fit};
+use instantsplat_rs::network::Network;
 use instantsplat_rs::optimizer::{LEARNING_RATES_3DGS, LearningRates};
 use instantsplat_rs::refine::{RefineSettings, run_refine};
 use instantsplat_rs::training::CameraPoses;
@@ -37,8 +38,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// MapAnything predicts dense points and cameras for a few photos; one Gaussian per
-    /// point is optimized against them with a wgpu rasterizer, the camera poses along.
+    /// A network (MapAnything or Depth Anything 3) predicts dense points and cameras for a
+    /// few photos; one Gaussian per point is optimized against them with a wgpu
+    /// rasterizer, the camera poses along.
     Fit(FitArgs),
     /// Continue optimizing a splat from `fit` against every frame of a COLMAP model,
     /// aligned to the splat by the frames they share; every k-th frame is held out and
@@ -59,6 +61,11 @@ struct FitArgs {
     /// Optimization steps; each renders one view.
     #[arg(long, default_value_t = 1000)]
     steps: usize,
+    /// The network predicting points and cameras: MapAnything (4.9 GB of weights, takes
+    /// the focal length as input) or Depth Anything 3 (137 MB, predicts its own; a given
+    /// focal length replaces it afterwards).
+    #[arg(long, value_enum, default_value = "mapanything")]
+    network: Network,
     /// 35 mm-equivalent focal length of the camera, in mm, for every image; overrides EXIF.
     /// Video frames have none: iPhone video is about 26. Images cropped after capture
     /// need the value for the crop, not the sensor.
@@ -67,22 +74,22 @@ struct FitArgs {
     /// Keep one dense point in this many along each image axis as a Gaussian.
     #[arg(long, default_value_t = 2)]
     stride: usize,
-    /// Drop points below this MapAnything confidence (1 + exp(raw), so always > 1, or 0
+    /// Drop points below this network confidence (1 + exp(raw), so always > 1, or 0
     /// when rejected).
     #[arg(long, default_value_t = 1.0)]
     min_conf: f32,
     #[arg(long, value_enum, default_value = "f16")]
     precision: Precision,
-    /// MapAnything safetensors checkpoint; downloaded from Hugging Face when omitted.
+    /// The network's safetensors checkpoint; downloaded from Hugging Face when omitted.
     #[arg(long)]
     weights: Option<PathBuf>,
-    /// Run MapAnything on the CPU instead of Metal.
+    /// Run the network on the CPU instead of Metal.
     #[arg(long)]
     cpu: bool,
     /// Print the loss every this many steps.
     #[arg(long, default_value_t = 50)]
     log_every: usize,
-    /// Keep the cameras where MapAnything put them instead of optimizing their poses (and
+    /// Keep the cameras where the network put them instead of optimizing their poses (and
     /// a shared focal scale) along with the Gaussians.
     #[arg(long)]
     no_pose_refinement: bool,
@@ -146,6 +153,7 @@ fn main() -> Result<()> {
             images: args.images,
             out: args.out,
             steps: args.steps,
+            network: args.network,
             focal_35mm: args.focal_35mm,
             stride: args.stride,
             min_conf: args.min_conf,

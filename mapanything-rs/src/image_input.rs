@@ -8,6 +8,7 @@
 //! camera, rotating object) work, since a static background otherwise tells the model the
 //! camera never moved.
 
+use std::io::{BufRead, Cursor, Seek, SeekFrom};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -103,11 +104,8 @@ impl Cutout {
 }
 
 /// FocalLengthIn35mmFilm, when the file has EXIF and the tag.
-fn exif_focal_35mm(path: &Path) -> Option<f64> {
-    let file = std::fs::File::open(path).ok()?;
-    let exif = exif::Reader::new()
-        .read_from_container(&mut std::io::BufReader::new(file))
-        .ok()?;
+fn exif_focal_35mm(file: &mut (impl BufRead + Seek)) -> Option<f64> {
+    let exif = exif::Reader::new().read_from_container(file).ok()?;
     let field = exif.get_field(exif::Tag::FocalLengthIn35mmFilm, exif::In::PRIMARY)?;
     field.value.get_uint(0).map(|mm| mm as f64)
 }
@@ -116,11 +114,11 @@ fn exif_focal_35mm(path: &Path) -> Option<f64> {
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-fn read_upright(path: &Path) -> Result<DynamicImage> {
-    let mut decoder = ImageReader::open(path)?
+fn read_upright(file: impl BufRead + Seek) -> Result<DynamicImage> {
+    let mut decoder = ImageReader::new(file)
         .with_guessed_format()?
         .into_decoder()
-        .with_context(|| format!("decoding {}", path.display()))?;
+        .context("decoding")?;
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
@@ -177,15 +175,28 @@ fn composite_on_backdrop(mut rgba: RgbaImage) -> DynamicImage {
 /// The upright image, cropped to its foreground and composited on the backdrop, at full
 /// resolution. Alpha is kept: it marks the foreground.
 pub fn load_cutout(path: &Path) -> Result<Cutout> {
-    let upright = read_upright(path).with_context(|| format!("reading image {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening image {}", path.display()))?;
+    cutout_from_file(std::io::BufReader::new(file), &path.display().to_string())
+}
+
+/// `load_cutout` of an encoded JPEG or PNG in memory (a photo picked in a browser);
+/// `label` names it in errors.
+pub fn cutout_from_bytes(encoded: &[u8], label: &str) -> Result<Cutout> {
+    cutout_from_file(Cursor::new(encoded), label)
+}
+
+fn cutout_from_file(mut file: impl BufRead + Seek, label: &str) -> Result<Cutout> {
+    let focal_35mm = exif_focal_35mm(&mut file);
+    file.seek(SeekFrom::Start(0))?;
+    let upright = read_upright(file).with_context(|| format!("reading image {label}"))?;
     let original_size = (upright.width(), upright.height());
-    let (foreground_crop, corner) = crop_to_foreground(upright.to_rgba8())
-        .with_context(|| format!("cropping {}", path.display()))?;
+    let (foreground_crop, corner) =
+        crop_to_foreground(upright.to_rgba8()).with_context(|| format!("cropping {label}"))?;
     Ok(Cutout {
         image: composite_on_backdrop(foreground_crop),
         original_size,
         mapping: PixelMapping::IDENTITY.then_crop(corner[0] as f64, corner[1] as f64),
-        focal_35mm: exif_focal_35mm(path),
+        focal_35mm,
     })
 }
 

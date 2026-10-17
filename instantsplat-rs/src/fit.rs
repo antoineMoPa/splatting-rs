@@ -1,7 +1,9 @@
-//! The `fit` command: MapAnything on a few photos, one Gaussian per point, a short
+//! The `fit` command: a network (`--network`) on a few photos, one Gaussian per point, a short
 //! optimization against those photos with the camera poses refined along (unless turned
-//! off), outputs next to the PLY; optionally judged against a COLMAP model of the capture
-//! (`evaluate_against_colmap.rs`), which plays no part in the training.
+//! off), outputs next to the PLY (the training views as RGBA PNGs, mask as alpha, so that
+//! the optimization can be continued from them, as the browser demo does); optionally
+//! judged against a COLMAP model of the capture (`evaluate_against_colmap.rs`), which
+//! plays no part in the training.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -14,7 +16,7 @@ use crate::cameras_json::write_cameras_json;
 use crate::evaluate_against_colmap::{EvaluationSettings, evaluate_against_colmap};
 use crate::gpu::Gpu;
 use crate::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
-use crate::network::{NetworkSettings, dense_views_from_images, image_name};
+use crate::network::{Network, NetworkSettings, dense_views_from_images, image_name};
 use crate::optimizer::{LEARNING_RATES_3DGS, LearningRates};
 use crate::run_output::{CAMERAS_FILE, SPLAT_FILE, output_dir};
 use crate::splat_ply::write_splat_ply;
@@ -24,6 +26,7 @@ pub struct FitSettings {
     pub images: Vec<PathBuf>,
     pub out: PathBuf,
     pub steps: usize,
+    pub network: Network,
     pub focal_35mm: Option<f64>,
     pub stride: usize,
     pub min_conf: f32,
@@ -53,6 +56,7 @@ pub fn run_fit(settings: &FitSettings) -> Result<()> {
     let (views, network_timing) = dense_views_from_images(
         &settings.images,
         &NetworkSettings {
+            network: settings.network,
             focal_35mm: settings.focal_35mm,
             dtype: settings.dtype,
             weights: settings.weights.clone(),
@@ -60,7 +64,8 @@ pub fn run_fit(settings: &FitSettings) -> Result<()> {
         },
     )?;
     println!(
-        "MapAnything: {} views of {}x{} in {:.2?} (+{:.2?} loading weights)",
+        "{}: {} views of {}x{} in {:.2?} (+{:.2?} loading weights)",
+        settings.network.label(),
         views.len(),
         views[0].width,
         views[0].height,
@@ -114,7 +119,7 @@ pub fn run_fit(settings: &FitSettings) -> Result<()> {
     let trainer = Trainer::new(&gpu, &report.cloud, &views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
     for (index, (view, camera)) in views.iter().zip(&report.cameras).enumerate() {
         trainer.render_camera(camera).to_rgb8().save(out_dir.join(format!("render_view{index}.png")))?;
-        view.to_rgb8().save(out_dir.join(format!("input_view{index}.png")))?;
+        view.to_rgba8().save(out_dir.join(format!("input_view{index}.png")))?;
     }
     println!("wrote {} renders and inputs to {}", views.len(), out_dir.display());
 

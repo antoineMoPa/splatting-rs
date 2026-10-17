@@ -19,12 +19,18 @@ struct ScanControl {
 
 var<workgroup> temp: array<u32, 256>;
 var<workgroup> carry: u32;
+// The length comes from a read-write buffer, which WebGPU's uniformity analysis takes as
+// possibly differing between threads; the loop over the chunks, with its barriers, needs
+// a uniform one, so it goes through workgroup memory and `workgroupUniformLoad`.
+var<workgroup> shared_length: u32;
 
-fn exclusive_scan(length: u32, thread: u32) -> u32 {
+fn exclusive_scan(length_from_buffer: u32, thread: u32) -> u32 {
     if thread == 0u {
         carry = 0u;
+        shared_length = length_from_buffer;
     }
-    workgroupBarrier();
+    // Includes a workgroup barrier.
+    let length = workgroupUniformLoad(&shared_length);
     let chunks = (length + 255u) / 256u;
     for (var chunk = 0u; chunk < chunks; chunk++) {
         let i = chunk * 256u + thread;

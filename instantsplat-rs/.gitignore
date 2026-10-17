@@ -4,4 +4,9 @@
 *.jpg
 *.jpeg
 *.png
+!web/demo.png
 runs/**
+web/pkg/
+web/site/
+!web/example/*.ply
+!web/example/*.png

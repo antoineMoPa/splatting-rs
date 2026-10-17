@@ -11,6 +11,7 @@ use anyhow::{Result, ensure};
 use candle_core::DType;
 
 use instantsplat_rs::fit::{FitSettings, run_fit};
+use instantsplat_rs::network::Network;
 use instantsplat_rs::optimizer::LEARNING_RATES_3DGS;
 use instantsplat_rs::training::CameraPoses;
 
@@ -27,6 +28,7 @@ fn main() -> Result<()> {
         images,
         out: PathBuf::from(OUT),
         steps: STEPS,
+        network: Network::Mapanything,
         focal_35mm: Some(focal_35mm),
         stride: 2,
         min_conf: 1.0,

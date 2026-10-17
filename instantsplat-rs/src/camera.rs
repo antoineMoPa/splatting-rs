@@ -2,7 +2,7 @@
 //! at integer coordinates: pixel (i, j) of the image is at (u, v) = (i, j).
 
 use bytemuck::{Pod, Zeroable};
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix3, Rotation3, UnitVector3, Vector3};
 
 #[derive(Clone, Debug)]
 pub struct PinholeCamera {
@@ -72,6 +72,21 @@ impl PinholeCamera {
     pub fn position(&self) -> Vector3<f64> {
         self.translation
     }
+
+    /// This camera swung about `center` (a novel viewpoint): `pitch` radians about its own
+    /// right axis, then `yaw` radians about the scene's vertical axis (y, camera 0's
+    /// down); it keeps looking at what it looked at relative to `center`.
+    pub fn orbited(&self, center: Vector3<f64>, yaw: f64, pitch: f64) -> PinholeCamera {
+        let right = UnitVector3::new_normalize(self.rotation.column(0).into_owned());
+        let orbit = (Rotation3::from_axis_angle(&Vector3::y_axis(), yaw)
+            * Rotation3::from_axis_angle(&right, pitch))
+        .into_inner();
+        PinholeCamera {
+            rotation: orbit * self.rotation,
+            translation: center + orbit * (self.translation - center),
+            ..self.clone()
+        }
+    }
 }
 
 /// Radius of the smallest sphere centered on the mean camera position that contains every
@@ -112,6 +127,28 @@ mod tests {
         let in_camera = w_rotation * point + w_translation;
         let back = rotation * in_camera + translation;
         assert!((back - point).norm() < 1e-12);
+    }
+
+    #[test]
+    fn orbit_keeps_the_distance_to_the_center_and_the_view_of_it() {
+        let camera = PinholeCamera {
+            rotation: nalgebra::Rotation3::from_euler_angles(0.1, -0.4, 0.2).into_inner(),
+            translation: Vector3::new(0.5, -0.3, -2.0),
+            focal: [100.0, 100.0],
+            principal_point: [10.0, 10.0],
+            width: 20,
+            height: 20,
+        };
+        let center = Vector3::new(0.1, 0.2, 1.0);
+        let orbited = camera.orbited(center, 0.7, -0.3);
+        assert!(((orbited.translation - center).norm() - (camera.translation - center).norm()).abs() < 1e-12);
+        // The center lands on the same pixel: same camera-frame coordinates before and after.
+        let in_camera = |camera: &PinholeCamera| {
+            let (rotation, translation) = camera.world_to_camera();
+            rotation * center + translation
+        };
+        assert!((in_camera(&orbited) - in_camera(&camera)).norm() < 1e-12);
+        assert_eq!(camera.orbited(center, 0.0, 0.0).translation, camera.translation);
     }
 
     #[test]

@@ -4,10 +4,13 @@
 //! are cycled in order. With `CameraPoses::Refined` the same backward pass gives the
 //! camera gradient, read back each step for one Adam update of the view's pose
 //! (`pose_refinement.rs`). The Gaussians are pruned (`prune.rs`) when the run ends.
+//!
+//! Everything that reads the GPU back is async so that a browser can await it
+//! (`optimize_async`, `step_async`, ...); the blocking `optimize`, `step`, ... are
+//! native-only `pollster::block_on` wrappers.
 
 use std::time::Duration;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::camera::{PinholeCamera, cameras_extent};
 use crate::dense_view::DenseView;
@@ -16,12 +19,8 @@ use crate::gpu::Gpu;
 use crate::loss::{LossTerms, ground_truth_rgba};
 use crate::optimizer::{Adam, LearningRates, position_rate_factor};
 use crate::pose_refinement::{FIXED_VIEW, PoseRefinement};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::prune::{PruneReport, prune};
-use crate::rasterizer::Rasterizer;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::rasterizer::Rendered;
-#[cfg(not(target_arch = "wasm32"))]
+use crate::rasterizer::{Rasterizer, Rendered};
 use crate::shaders::PARAM_STRIDE;
 
 pub struct TrainSettings {
@@ -48,6 +47,7 @@ pub struct TrainReport {
     pub focal_scale: f64,
     pub gaussians_before_pruning: usize,
     pub prune: PruneReport,
+    /// Since the trainer was created.
     pub elapsed: Duration,
     /// Mean absolute color error of the last logged step's view, in [0, 1] (premultiplied
     /// rgb against the photo on foreground pixels, over all pixels); `last_loss.l1`.
@@ -60,23 +60,29 @@ pub struct TrainReport {
 }
 
 /// The optimizer's state for one scene: parameters on the GPU, the rasterizer sized for
-/// the views, and Adam.
+/// the views (it holds their ground truth, so the views themselves are not kept), and
+/// Adam.
 pub struct Trainer<'a> {
     gpu: &'a Gpu,
-    views: &'a [DenseView],
+    /// The views' cameras as given.
+    initial_cameras: Vec<PinholeCamera>,
     params: wgpu::Buffer,
     rasterizer: Rasterizer,
     adam: Adam,
     poses: Option<PoseRefinement>,
     gaussian_count: usize,
     extent: f32,
+    started: Instant,
+    /// Of the last `log_step_async`.
+    last_loss: LossTerms,
+    last_intersections: u32,
 }
 
 impl<'a> Trainer<'a> {
     pub fn new(
         gpu: &'a Gpu,
         cloud: &GaussianCloud,
-        views: &'a [DenseView],
+        views: &[DenseView],
         learning_rates: LearningRates,
         camera_poses: CameraPoses,
     ) -> Self {
@@ -129,13 +135,16 @@ impl<'a> Trainer<'a> {
         );
         Self {
             gpu,
-            views,
+            initial_cameras: cameras,
             params,
             rasterizer,
             adam,
             poses,
             gaussian_count: cloud.len(),
             extent,
+            started: Instant::now(),
+            last_loss: LossTerms::default(),
+            last_intersections: 0,
         }
     }
 
@@ -144,16 +153,20 @@ impl<'a> Trainer<'a> {
         self.extent
     }
 
+    pub fn view_count(&self) -> usize {
+        self.initial_cameras.len()
+    }
+
     /// The camera `view` is rendered with now.
     pub fn camera(&self, view: usize) -> PinholeCamera {
         match &self.poses {
             Some(poses) => poses.camera(view),
-            None => self.views[view].camera.clone(),
+            None => self.initial_cameras[view].clone(),
         }
     }
 
     pub fn cameras(&self) -> Vec<PinholeCamera> {
-        (0..self.views.len()).map(|view| self.camera(view)).collect()
+        (0..self.view_count()).map(|view| self.camera(view)).collect()
     }
 
     pub fn focal_scale(&self) -> f64 {
@@ -162,7 +175,7 @@ impl<'a> Trainer<'a> {
 
     /// One optimization step on `view`, with the position and camera pose learning rates
     /// at `rate_factor` of their initial values.
-    pub fn step(&mut self, view: usize, rate_factor: f32) {
+    pub async fn step_async(&mut self, view: usize, rate_factor: f32) {
         self.rasterizer.set_camera(self.gpu, &self.camera(view));
         let mut encoder = self.gpu.encoder();
         self.rasterizer.encode_forward(&mut encoder);
@@ -170,24 +183,42 @@ impl<'a> Trainer<'a> {
         self.rasterizer.encode_backward(&mut encoder);
         self.adam.encode_step(self.gpu, &mut encoder, rate_factor);
         self.gpu.submit(encoder);
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(poses) = &mut self.poses {
-            let gradient = self.rasterizer.read_camera_gradient(self.gpu);
+            let gradient = self.rasterizer.read_camera_gradient_async(self.gpu).await;
             poses.step(view, &gradient, rate_factor);
         }
-        #[cfg(target_arch = "wasm32")]
-        assert!(self.poses.is_none(), "pose refinement needs the blocking camera gradient read back");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn step(&mut self, view: usize, rate_factor: f32) {
+        pollster::block_on(self.step_async(view, rate_factor))
+    }
+
+    /// After step `step` (0-based) of `view`, its loss and intersection list still in the
+    /// buffers: reads them back, prints them with the pose gradient, keeps them for the
+    /// report, and returns the loss. `optimize_async` calls it every `log_every` steps.
+    pub async fn log_step_async(&mut self, step: usize, view: usize) -> LossTerms {
+        self.last_intersections = self.rasterizer.read_intersections_async(self.gpu).await.count;
+        self.last_loss = self.rasterizer.read_loss_async(self.gpu).await;
+        println!(
+            "step {:>5} view {view}: {}, {} gaussian-tile pairs, {:.1?}",
+            step + 1,
+            self.last_loss,
+            self.last_intersections,
+            self.started.elapsed()
+        );
+        self.print_pose_step_async(view).await;
+        self.last_loss
     }
 
     /// After a logged step of `view`: the view's pose gradient against the Gaussians'
     /// mean position gradient (whether the pose gradient is comparable, not swamped),
     /// and where the view's pose stands.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn print_pose_step(&self, view: usize) {
+    async fn print_pose_step_async(&self, view: usize) {
         let Some(poses) = &self.poses else {
             return;
         };
-        let gradients = self.rasterizer.read_param_gradients(self.gpu);
+        let gradients = self.rasterizer.read_param_gradients_async(self.gpu).await;
         let position_gradient = gradients
             .chunks_exact(PARAM_STRIDE)
             .map(|g| (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt() as f64)
@@ -212,7 +243,7 @@ impl<'a> Trainer<'a> {
         let Some(poses) = &self.poses else {
             return;
         };
-        for view in 0..self.views.len() {
+        for view in 0..self.view_count() {
             let correction = poses.correction(view);
             println!(
                 "  view {view}: rotated {:.2} deg, center moved {:.4} ({:.1}% of the extent)",
@@ -224,40 +255,51 @@ impl<'a> Trainer<'a> {
         println!("  focal scale {:.4}", poses.focal_scale());
     }
 
+    pub async fn render_async(&self, view: usize) -> Rendered {
+        self.rasterizer.render_async(self.gpu, &self.camera(view)).await
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render(&self, view: usize) -> Rendered {
-        self.rasterizer.render(self.gpu, &self.camera(view))
+        pollster::block_on(self.render_async(view))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     /// Any camera of the views' image size, for novel viewpoints.
-    pub fn render_camera(&self, camera: &PinholeCamera) -> Rendered {
-        self.rasterizer.render(self.gpu, camera)
+    pub async fn render_camera_async(&self, camera: &PinholeCamera) -> Rendered {
+        self.rasterizer.render_async(self.gpu, camera).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_camera(&self, camera: &PinholeCamera) -> Rendered {
+        pollster::block_on(self.render_camera_async(camera))
+    }
+
     /// The loss of `view` with the current Gaussians, without a step.
-    pub fn loss(&self, view: usize) -> LossTerms {
+    pub async fn loss_async(&self, view: usize) -> LossTerms {
         self.rasterizer.set_camera(self.gpu, &self.camera(view));
         let mut encoder = self.gpu.encoder();
         self.rasterizer.encode_forward(&mut encoder);
         self.rasterizer.encode_loss(&mut encoder, view);
         self.gpu.submit(encoder);
-        self.rasterizer.read_loss(self.gpu)
+        self.rasterizer.read_loss_async(self.gpu).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub fn loss(&self, view: usize) -> LossTerms {
+        pollster::block_on(self.loss_async(view))
+    }
+
     /// Means over every view of the loss terms, with the current Gaussians.
-    pub fn loss_over_views(&self) -> LossTerms {
+    pub async fn loss_over_views_async(&self) -> LossTerms {
         let mut sum = LossTerms::default();
-        for view in 0..self.views.len() {
-            let terms = self.loss(view);
+        for view in 0..self.view_count() {
+            let terms = self.loss_async(view).await;
             sum.l1 += terms.l1;
             sum.alpha += terms.alpha;
             sum.dssim += terms.dssim;
             sum.total += terms.total;
         }
-        let count = self.views.len() as f32;
+        let count = self.view_count() as f32;
         LossTerms {
             l1: sum.l1 / count,
             alpha: sum.alpha / count,
@@ -267,35 +309,47 @@ impl<'a> Trainer<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn cloud(&self) -> GaussianCloud {
-        GaussianCloud::from_packed(&self.gpu.read_back::<f32>(&self.params, self.gaussian_count * PARAM_STRIDE))
+    pub fn loss_over_views(&self) -> LossTerms {
+        pollster::block_on(self.loss_over_views_async())
+    }
+
+    pub async fn cloud_async(&self) -> GaussianCloud {
+        GaussianCloud::from_packed(&self.gpu.read_back_async::<f32>(&self.params, self.gaussian_count * PARAM_STRIDE).await)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn optimize(mut self, settings: &TrainSettings) -> TrainReport {
+    pub fn cloud(&self) -> GaussianCloud {
+        pollster::block_on(self.cloud_async())
+    }
+
+    /// `settings.steps` steps cycling the views, logged every `settings.log_every`, then
+    /// `finish_async`.
+    pub async fn optimize_async(mut self, settings: &TrainSettings) -> TrainReport {
         assert!(settings.log_every > 0, "log_every");
-        let started = Instant::now();
-        let mut last_loss = LossTerms::default();
-        let mut last_intersections = 0;
         for step in 0..settings.steps {
-            let view = step % self.views.len();
-            self.step(view, position_rate_factor(step, settings.steps));
+            let view = step % self.view_count();
+            self.step_async(view, position_rate_factor(step, settings.steps)).await;
             if (step + 1) % settings.log_every == 0 || step + 1 == settings.steps {
-                last_intersections = self.rasterizer.read_intersections(self.gpu).count;
-                last_loss = self.rasterizer.read_loss(self.gpu);
-                println!(
-                    "step {:>5} view {view}: {last_loss}, {last_intersections} gaussian-tile pairs, {:.1?}",
-                    step + 1,
-                    started.elapsed()
-                );
-                self.print_pose_step(view);
+                self.log_step_async(step, view).await;
             }
         }
         assert_eq!(self.adam.steps_taken() as usize, settings.steps);
-        let final_loss = self.loss_over_views();
-        println!("mean over the {} views: {final_loss}", self.views.len());
+        self.finish_async().await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn optimize(self, settings: &TrainSettings) -> TrainReport {
+        pollster::block_on(self.optimize_async(settings))
+    }
+
+    /// After the steps: the loss over every view, the pose corrections printed, the
+    /// Gaussians read back and pruned.
+    pub async fn finish_async(self) -> TrainReport {
+        assert!(self.adam.steps_taken() > 0, "no step taken");
+        let final_loss = self.loss_over_views_async().await;
+        println!("mean over the {} views: {final_loss}", self.view_count());
         self.print_pose_corrections();
-        let trained = self.cloud();
+        let trained = self.cloud_async().await;
         let (cloud, prune_report) = prune(&trained, self.extent);
         println!("pruned: {prune_report}");
         TrainReport {
@@ -304,11 +358,11 @@ impl<'a> Trainer<'a> {
             focal_scale: self.focal_scale(),
             gaussians_before_pruning: trained.len(),
             prune: prune_report,
-            elapsed: started.elapsed(),
-            last_mean_error: last_loss.l1,
-            last_loss,
+            elapsed: self.started.elapsed(),
+            last_mean_error: self.last_loss.l1,
+            last_loss: self.last_loss,
             final_loss,
-            last_intersections,
+            last_intersections: self.last_intersections,
         }
     }
 }

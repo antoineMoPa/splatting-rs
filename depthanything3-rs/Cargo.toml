@@ -1,0 +1,33 @@
+[package]
+name = "depthanything3-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Depth Anything 3 (Small, Base) multi-view depth and camera estimation from images, on candle"
+license = "Apache-2.0"
+readme = "README.md"
+
+[features]
+default = ["metal", "hf-hub"]
+# candle on Metal. Without it only the CPU backend, which also builds for wasm32
+# (instantsplat-rs's browser demo runs the model there; the Metal bindings do not compile
+# for wasm32).
+metal = ["candle-core/metal", "candle-nn/metal", "mapanything-rs/metal"]
+# Downloading the weights from Hugging Face (`weights::load_model`, the binary).
+hf-hub = ["dep:hf-hub", "mapanything-rs/hf-hub"]
+
+[[bin]]
+name = "depthanything3-rs"
+path = "src/main.rs"
+required-features = ["metal", "hf-hub"]
+
+[dependencies]
+anyhow = "1"
+candle-core = "0.11"
+candle-nn = "0.11"
+clap = { version = "4", features = ["derive"] }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"], optional = true }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+mapanything-rs = { path = "../mapanything-rs", default-features = false }
+nalgebra = "0.34"
+# std's Instant on native, performance.now() on wasm32.
+web-time = "1"

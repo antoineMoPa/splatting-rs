@@ -2,28 +2,46 @@
 name = "instantsplat-rs"
 version = "0.1.0"
 edition = "2024"
-description = "InstantSplat-style Gaussian splats from a few photos: MapAnything on candle for points and cameras, a wgpu rasterizer for the optimization"
+description = "InstantSplat-style Gaussian splats from a few photos: MapAnything or Depth Anything 3 on candle for points and cameras, a wgpu rasterizer for the optimization"
 license = "Apache-2.0"
 readme = "README.md"
 
 [features]
-default = ["mapanything"]
-# The feed-forward network stage (candle, Metal). Off for wasm32: candle has no WebGPU backend.
-mapanything = ["dep:mapanything-rs", "dep:candle-core", "dep:candle-nn", "dep:hf-hub"]
+default = ["networks"]
+# Depth Anything 3's prediction as `DenseView`s (`network_da3.rs`): candle's CPU backend,
+# which also builds for wasm32 (the browser demo runs the network there).
+da3 = ["dep:depthanything3-rs", "dep:mapanything-rs", "dep:candle-core"]
+# The whole feed-forward stage from photo files (`fit`, `network.rs`): MapAnything or Depth
+# Anything 3 on Metal, weights from Hugging Face. Native only.
+networks = [
+    "da3",
+    "dep:candle-nn",
+    "dep:hf-hub",
+    "candle-core/metal",
+    "candle-nn/metal",
+    "depthanything3-rs/metal",
+    "depthanything3-rs/hf-hub",
+    "mapanything-rs/metal",
+    "mapanything-rs/hf-hub",
+]
 
 [dependencies]
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
-candle-core = { version = "0.11", features = ["metal"], optional = true }
-candle-nn = { version = "0.11", features = ["metal"], optional = true }
+candle-core = { version = "0.11", optional = true }
+candle-nn = { version = "0.11", optional = true }
 clap = { version = "4", features = ["derive"] }
+depthanything3-rs = { path = "../depthanything3-rs", default-features = false, optional = true }
 hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"], optional = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-mapanything-rs = { path = "../mapanything-rs", optional = true }
+mapanything-rs = { path = "../mapanything-rs", default-features = false, optional = true }
 nalgebra = "0.34"
-pollster = "0.4"
 serde_json = { version = "1", features = ["float_roundtrip"] }
+web-time = "1"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "webgpu"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
 
 [dev-dependencies]
 rand = "0.9"

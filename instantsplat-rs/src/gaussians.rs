@@ -2,6 +2,8 @@
 //! stored values are what the PLY holds and what Adam updates (log scales, opacity logits,
 //! unnormalized quaternions, SH degree-0 coefficients).
 
+use nalgebra::Vector3;
+
 use crate::shaders::PARAM_STRIDE;
 
 /// Degree-0 real spherical harmonic basis: color = SH_C0 * sh_dc + 0.5.
@@ -35,6 +37,16 @@ impl GaussianCloud {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Mean position.
+    pub fn centroid(&self) -> Vector3<f64> {
+        let count = self.len();
+        assert!(count > 0, "centroid of no Gaussians");
+        self.positions
+            .chunks_exact(3)
+            .fold(Vector3::zeros(), |sum, p| sum + Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64))
+            / count as f64
     }
 
     /// The layout the kernels read: per Gaussian, position, log scale, rotation, opacity
@@ -112,6 +124,18 @@ mod tests {
         assert_eq!(&packed[14..17], &[4.0, 5.0, 6.0]);
         assert_eq!(packed[10], 0.1);
         assert_eq!(GaussianCloud::from_packed(&packed), cloud);
+    }
+
+    #[test]
+    fn centroid_is_the_mean_position() {
+        let cloud = GaussianCloud {
+            positions: vec![1.0, 2.0, 3.0, 3.0, 2.0, 1.0],
+            log_scales: vec![0.0; 6],
+            rotations: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            opacity_logits: vec![0.0; 2],
+            sh_dc: vec![0.0; 6],
+        };
+        assert_eq!(cloud.centroid(), Vector3::new(2.0, 2.0, 2.0));
     }
 
     #[test]

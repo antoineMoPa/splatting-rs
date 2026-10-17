@@ -38,8 +38,9 @@ fn bicubic_taps(input: usize, output: usize, scale: f64) -> Vec<([usize; 4], [f6
         .collect()
 }
 
-/// Bicubic resize of a row-major [rows, columns, channels] grid.
-fn resize_grid(
+/// Bicubic resize of a row-major [rows, columns, channels] grid. Public for depthanything3-rs,
+/// whose DINOv2 resizes its positional embedding the same way.
+pub fn resize_grid(
     grid: &[f32],
     (rows, columns, channels): (usize, usize, usize),
     (out_rows, out_columns): (usize, usize),

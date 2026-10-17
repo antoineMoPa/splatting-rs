@@ -2,7 +2,7 @@
 //! f_dc_*, opacity, scale_*, rot_*), SH degree 0, which Brush and SuperSplat open.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -16,8 +16,12 @@ const PROPERTIES: [&str; 17] = [
 ];
 
 pub fn write_splat_ply(path: &Path, cloud: &GaussianCloud) -> Result<()> {
+    write_splat_ply_to(BufWriter::new(File::create(path)?), cloud)
+}
+
+/// `write_splat_ply` into any writer (a download in a browser).
+pub fn write_splat_ply_to(mut out: impl Write, cloud: &GaussianCloud) -> Result<()> {
     let count = cloud.len();
-    let mut out = BufWriter::new(File::create(path)?);
     write!(
         out,
         "ply\nformat binary_little_endian 1.0\ncomment Exported from instantsplat-rs\nelement vertex {count}\n"
@@ -44,26 +48,30 @@ pub fn write_splat_ply(path: &Path, cloud: &GaussianCloud) -> Result<()> {
 /// Reads a PLY written by `write_splat_ply` or any 3DGS splat with float properties; extra
 /// properties (f_rest_*, ...) are skipped.
 pub fn read_splat_ply(path: &Path) -> Result<GaussianCloud> {
-    let mut reader = BufReader::new(File::open(path)?);
+    parse_splat_ply(BufReader::new(File::open(path)?), &path.display().to_string())
+}
+
+/// `read_splat_ply` from any reader (a fetched file in a browser); `label` names it in errors.
+pub fn parse_splat_ply(mut reader: impl BufRead, label: &str) -> Result<GaussianCloud> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
-    ensure!(line.trim_end() == "ply", "{}: not a PLY file", path.display());
+    ensure!(line.trim_end() == "ply", "{label}: not a PLY file");
     let mut count = None;
     let mut properties: Vec<String> = Vec::new();
     loop {
         line.clear();
-        ensure!(reader.read_line(&mut line)? > 0, "{}: header never ends", path.display());
+        ensure!(reader.read_line(&mut line)? > 0, "{label}: header never ends");
         let words: Vec<&str> = line.split_whitespace().collect();
         match words.as_slice() {
             ["format", "binary_little_endian", "1.0"] | ["comment", ..] => {}
             ["element", "vertex", n] => count = Some(n.parse::<usize>()?),
-            ["element", other, _] => bail!("{}: unsupported element {other}", path.display()),
+            ["element", other, _] => bail!("{label}: unsupported element {other}"),
             ["property", "float", name] => properties.push((*name).to_string()),
             ["property", kind, name] => {
-                bail!("{}: property {name} is {kind}, not float", path.display())
+                bail!("{label}: property {name} is {kind}, not float")
             }
             ["end_header"] => break,
-            _ => bail!("{}: unexpected header line {line:?}", path.display()),
+            _ => bail!("{label}: unexpected header line {line:?}"),
         }
     }
     let count = count.context("no vertex element")?;
@@ -71,7 +79,7 @@ pub fn read_splat_ply(path: &Path) -> Result<GaussianCloud> {
         properties
             .iter()
             .position(|p| p == name)
-            .with_context(|| format!("{}: no property {name}", path.display()))
+            .with_context(|| format!("{label}: no property {name}"))
     };
     let columns: Vec<usize> = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
         .iter()

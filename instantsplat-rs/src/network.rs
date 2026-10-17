@@ -1,26 +1,58 @@
-//! Stage 1: MapAnything (via mapanything-rs, candle on Metal) turns the input images into
-//! dense point maps and cameras. Requires the `mapanything` feature; candle has no WebGPU
-//! backend, so this stage does not build for wasm32.
+//! Stage 1: a feed-forward network (candle on Metal) turns the input images into dense
+//! point maps and cameras, as `DenseView`s. Two networks: MapAnything (`../mapanything-rs`,
+//! the default) and Depth Anything 3 (`../depthanything3-rs`, 35x smaller). Running them
+//! from photo files needs the `networks` feature (native); the `da3` feature alone gives
+//! what the browser demo needs, Depth Anything 3's prediction turned into `DenseView`s.
+//!
+//! Either way each view's intrinsics are the given ones (`focal_35mm` or EXIF, scaled to
+//! the network's input size, principal point at the photo's center) when known, and the
+//! points are moved onto the given rays (`replace_rays`, keeping the predicted distance
+//! along each ray), so that rendering the points through the camera lands on their pixels.
+//! Without a known focal length, each network's own intrinsics are used.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::Duration;
 
+#[cfg(feature = "networks")]
 use anyhow::Result;
-use candle_core::{DType, Device};
-use candle_nn::VarBuilder;
-use mapanything_rs::model::MapAnything;
-use mapanything_rs::pipeline::reconstruct;
-use mapanything_rs::preprocess::load_images;
+#[cfg(feature = "networks")]
+use candle_core::Device;
+use candle_core::DType;
+use clap::ValueEnum;
+use mapanything_rs::image_input::Intrinsics;
 
-use crate::camera::PinholeCamera;
 use crate::dense_view::DenseView;
-use crate::pinhole_fit::fit_pinhole;
 use crate::replace_rays::replace_rays;
 
-const WEIGHTS_REPO: &str = "facebook/map-anything-apache";
-const WEIGHTS_FILE: &str = "model.safetensors";
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Network {
+    /// Meta's MapAnything (1.2 B parameters, 4.9 GB): takes the known intrinsics as input.
+    Mapanything,
+    /// ByteDance's Depth Anything 3 Small (34 M parameters, 137 MB): predicts its own
+    /// intrinsics.
+    Da3Small,
+    /// Depth Anything 3 Base (135 M parameters, 541 MB).
+    Da3Base,
+}
+
+const NETWORK_LABELS: [(Network, &str); 3] = [
+    (Network::Mapanything, "MapAnything"),
+    (Network::Da3Small, "Depth Anything 3 Small"),
+    (Network::Da3Base, "Depth Anything 3 Base"),
+];
+
+impl Network {
+    pub fn label(self) -> &'static str {
+        NETWORK_LABELS
+            .iter()
+            .find(|(network, _)| *network == self)
+            .map(|(_, label)| *label)
+            .expect("every network has a label")
+    }
+}
 
 pub struct NetworkSettings {
+    pub network: Network,
     /// 35 mm-equivalent focal length for every image, overriding EXIF.
     pub focal_35mm: Option<f64>,
     pub dtype: DType,
@@ -30,101 +62,43 @@ pub struct NetworkSettings {
 }
 
 pub struct NetworkTiming {
-    pub load_weights: std::time::Duration,
-    pub inference: std::time::Duration,
+    pub load_weights: Duration,
+    pub inference: Duration,
 }
 
-/// Runs MapAnything on `images` (view 0 first). The point maps are in view 0's camera
-/// frame. Each view's intrinsics are the given ones (`focal_35mm` or EXIF, scaled by
-/// mapanything-rs to its input size, principal point at the photo's center) when known,
-/// and the points are moved onto the given rays (`replace_rays`, keeping the predicted
-/// distance along each ray); otherwise the intrinsics are fit to the view's own point
-/// map. Either way rendering the points through the camera lands on their pixels.
-pub fn dense_views_from_images(
-    images: &[PathBuf],
-    settings: &NetworkSettings,
-) -> Result<(Vec<DenseView>, NetworkTiming)> {
-    let device = if settings.cpu {
-        Device::Cpu
-    } else {
-        Device::new_metal(0)?
-    };
-    let weights = match &settings.weights {
-        Some(path) => path.clone(),
-        None => hf_hub::api::sync::Api::new()?
-            .model(WEIGHTS_REPO.to_string())
-            .get(WEIGHTS_FILE)?,
-    };
-    let started = Instant::now();
-    // SAFETY: the checkpoint file is not modified while mapped.
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&weights], settings.dtype, &device)? };
-    let model = MapAnything::new(vb)?;
-    let load_weights = started.elapsed();
-    println!("loaded {} in {load_weights:.2?}", weights.display());
+#[cfg(feature = "networks")]
+pub fn device(settings: &NetworkSettings) -> Result<Device> {
+    Ok(if settings.cpu { Device::Cpu } else { Device::new_metal(0)? })
+}
 
-    let inputs = load_images(images, settings.focal_35mm, settings.dtype, &device)?;
-    let known = inputs.iter().filter(|image| image.intrinsics.is_some()).count();
-    println!("camera intrinsics known for {known} of {} images", inputs.len());
-    let started = Instant::now();
-    let reconstruction = reconstruct(&model, &inputs, &device)?;
-    let inference = started.elapsed();
+/// Runs the network on `images` (view 0 first). The point maps are in view 0's camera
+/// frame.
+#[cfg(feature = "networks")]
+pub fn dense_views_from_images(images: &[PathBuf], settings: &NetworkSettings) -> Result<(Vec<DenseView>, NetworkTiming)> {
+    match settings.network {
+        Network::Mapanything => crate::network_mapanything::dense_views(images, settings),
+        Network::Da3Small => crate::network_da3::dense_views(images, settings, depthanything3_rs::variant::Variant::Small),
+        Network::Da3Base => crate::network_da3::dense_views(images, settings, depthanything3_rs::variant::Variant::Base),
+    }
+}
 
-    let views = reconstruction
-        .point_maps
-        .iter()
-        .zip(&reconstruction.cameras)
-        .zip(&inputs)
-        .map(|((point_map, camera), input)| {
-            let pose = PinholeCamera {
-                rotation: camera.rotation,
-                translation: camera.translation,
-                focal: [camera.focal; 2],
-                principal_point: [0.0; 2],
-                width: point_map.width as u32,
-                height: point_map.height as u32,
-            };
-            let mut view = DenseView {
-                width: point_map.width,
-                height: point_map.height,
-                points: point_map.points.clone(),
-                conf: point_map.conf.clone(),
-                foreground: point_map.foreground.clone(),
-                rgb: input.rgb.as_raw().iter().map(|&c| c as f32 / 255.0).collect(),
-                camera: pose,
-            };
-            match input.intrinsics {
-                Some(given) => {
-                    println!(
-                        "view {}x{}: given focal {:.1} {:.1} px (mapanything fit {:.1}), principal point {:.1} {:.1}",
-                        view.width, view.height, given.focal[0], given.focal[1], camera.focal, given.principal_point[0], given.principal_point[1]
-                    );
-                    view.camera.focal = given.focal;
-                    view.camera.principal_point = given.principal_point;
-                    // The network predicts its own rays regardless; put the points on
-                    // the given ones so that they render onto their pixels.
-                    replace_rays(&mut view);
-                }
-                None => {
-                    let fit = fit_pinhole(&view);
-                    println!(
-                        "view {}x{}: fit focal {:.1} {:.1} px (mapanything {:.1}), principal point {:.1} {:.1}",
-                        view.width, view.height, fit.focal[0], fit.focal[1], camera.focal, fit.principal_point[0], fit.principal_point[1]
-                    );
-                    view.camera.focal = fit.focal;
-                    view.camera.principal_point = fit.principal_point;
-                }
-            }
-            view.check();
-            view
-        })
-        .collect();
-    Ok((
-        views,
-        NetworkTiming {
-            load_weights,
-            inference,
-        },
-    ))
+/// Gives `view` the known intrinsics and puts its points on their rays; `predicted` (the
+/// network's own focal) is only printed next to them.
+pub fn use_given_intrinsics(view: &mut DenseView, given: Intrinsics, predicted: [f64; 2]) {
+    println!(
+        "view {}x{}: given focal {:.1} {:.1} px (network {:.1} {:.1}), principal point {:.1} {:.1}",
+        view.width,
+        view.height,
+        given.focal[0],
+        given.focal[1],
+        predicted[0],
+        predicted[1],
+        given.principal_point[0],
+        given.principal_point[1]
+    );
+    view.camera.focal = given.focal;
+    view.camera.principal_point = given.principal_point;
+    replace_rays(view);
 }
 
 pub fn image_name(path: &Path) -> String {

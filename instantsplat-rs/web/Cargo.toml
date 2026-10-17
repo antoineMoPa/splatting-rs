@@ -1,0 +1,39 @@
+[package]
+name = "instantsplat-web"
+version = "0.1.0"
+edition = "2024"
+description = "Browser demo of instantsplat-rs: photos through Depth Anything 3 Small (wasm), then Gaussians rendered and optimized through WebGPU"
+license = "Apache-2.0"
+publish = false
+
+# Its own workspace root: `../..` (splatting-rs) builds natively, this crate only for
+# wasm32 (`.cargo/config.toml` sets the target and shares the parent's target directory).
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+candle-core = "0.11"
+console_error_panic_hook = "0.1"
+depthanything3-rs = { path = "../../depthanything3-rs", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+instantsplat-rs = { path = "..", default-features = false, features = ["da3"] }
+js-sys = "0.3"
+mapanything-rs = { path = "../../mapanything-rs", default-features = false }
+# Pinned to the installed `wasm-bindgen` CLI, which must match exactly.
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["ImageData"] }
+web-time = "1"
+# candle's dependencies draw entropy through getrandom, which on wasm32 must be told to
+# use the browser's (`.cargo/config.toml` sets the matching `getrandom_backend` cfg).
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+# candle 0.11.0 does not compile for wasm32 with SIMD (its simd128 kernels lack the f16
+# types; fixed upstream in #3904, the commit pinned here, still version 0.11.0). The
+# native workspace keeps the crates.io release.
+[patch.crates-io]
+candle-core = { git = "https://github.com/huggingface/candle", rev = "042dd00edaba" }
+candle-nn = { git = "https://github.com/huggingface/candle", rev = "042dd00edaba" }

@@ -52,29 +52,28 @@ fn main(
             batch_opacity[thread] = p.opacity;
         }
         workgroupBarrier();
-        if done {
-            continue;
-        }
+        // No break or continue on a per-pixel condition: WebGPU's uniformity analysis
+        // would then refuse the barriers of the next batch. Finished pixels idle instead.
         let in_batch = min(BATCH, count - b * BATCH);
         for (var k = 0u; k < in_batch; k++) {
-            let d = batch_mean[k] - pixel;
-            let conic = batch_conic[k];
-            let power = -0.5 * (conic.x * d.x * d.x + conic.z * d.y * d.y) - conic.y * d.x * d.y;
-            if power > 0.0 {
-                continue;
+            if !done {
+                let d = batch_mean[k] - pixel;
+                let conic = batch_conic[k];
+                let power = -0.5 * (conic.x * d.x * d.x + conic.z * d.y * d.y) - conic.y * d.x * d.y;
+                if power <= 0.0 {
+                    let alpha = min(MAX_ALPHA, batch_opacity[k] * exp(power));
+                    if alpha >= MIN_ALPHA {
+                        let next_transmittance = transmittance * (1.0 - alpha);
+                        if next_transmittance < MIN_TRANSMITTANCE {
+                            done = true;
+                        } else {
+                            color += batch_color[k] * alpha * transmittance;
+                            transmittance = next_transmittance;
+                            contributed = b * BATCH + k + 1u;
+                        }
+                    }
+                }
             }
-            let alpha = min(MAX_ALPHA, batch_opacity[k] * exp(power));
-            if alpha < MIN_ALPHA {
-                continue;
-            }
-            let next_transmittance = transmittance * (1.0 - alpha);
-            if next_transmittance < MIN_TRANSMITTANCE {
-                done = true;
-                break;
-            }
-            color += batch_color[k] * alpha * transmittance;
-            transmittance = next_transmittance;
-            contributed = b * BATCH + k + 1u;
         }
     }
 

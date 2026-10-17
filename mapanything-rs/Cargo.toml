@@ -6,12 +6,25 @@ description = "MapAnything feed-forward 3D reconstruction from images, on candle
 license = "Apache-2.0"
 readme = "README.md"
 
+[features]
+default = ["metal", "hf-hub"]
+# candle on Metal. Without it only the CPU backend: what depthanything3-rs builds for
+# wasm32 (candle's Metal bindings do not compile there).
+metal = ["candle-core/metal", "candle-nn/metal"]
+# Downloading the weights from Hugging Face (the binary).
+hf-hub = ["dep:hf-hub"]
+
+[[bin]]
+name = "mapanything-rs"
+path = "src/main.rs"
+required-features = ["metal", "hf-hub"]
+
 [dependencies]
 anyhow = "1"
-candle-core = { version = "0.11", features = ["metal"] }
-candle-nn = { version = "0.11", features = ["metal"] }
+candle-core = "0.11"
+candle-nn = "0.11"
 clap = { version = "4", features = ["derive"] }
-hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"] }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"], optional = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 kamadak-exif = "0.6"
 nalgebra = "0.34"

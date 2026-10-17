@@ -43,10 +43,19 @@ pub fn mean_error(errors: &[ViewError]) -> ViewError {
 }
 
 /// `cloud` rendered through every view's camera.
-pub fn render_all(gpu: &Gpu, cloud: &GaussianCloud, views: &[DenseView]) -> Vec<Rendered> {
+pub async fn render_all_async(gpu: &Gpu, cloud: &GaussianCloud, views: &[DenseView]) -> Vec<Rendered> {
     if views.is_empty() {
         return Vec::new();
     }
     let trainer = Trainer::new(gpu, cloud, views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
-    (0..views.len()).map(|index| trainer.render(index)).collect()
+    let mut renders = Vec::with_capacity(views.len());
+    for index in 0..views.len() {
+        renders.push(trainer.render_async(index).await);
+    }
+    renders
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_all(gpu: &Gpu, cloud: &GaussianCloud, views: &[DenseView]) -> Vec<Rendered> {
+    pollster::block_on(render_all_async(gpu, cloud, views))
 }

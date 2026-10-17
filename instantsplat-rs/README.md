@@ -24,11 +24,18 @@ cargo run --release -p instantsplat-rs -- fit photos/*.jpg --out runs/thing
 10 to 20 JPEG or PNG photos with small steps between them, the first one straight on. 11
 photos take about 3 minutes on an M5 (plus the one-time weights download). Everything goes
 in `runs/thing/`: `splat.ply` (3DGS PLY), `cameras.json`, and one `render_view{i}.png` /
-`input_view{i}.png` pair per photo.
+`input_view{i}.png` pair per photo (the input view as the network saw it, cropped to the
+foreground, with the mask as alpha: the training view, which the browser demo reloads).
 
 The focal length comes from the photos' EXIF. Video frames have none: pass `--focal-35mm`
 (about 26 for iPhone video). `--steps` (default 1000) and `--stride` (default 2: one
 Gaussian per 2x2 pixels) trade time for quality.
+
+`--network da3-small` replaces MapAnything with Depth Anything 3 Small
+(`../depthanything3-rs`, 137 MB of weights instead of 4.9 GB, 2 s instead of 12 s for 6
+photos): it predicts depth and cameras, including the focal length; a known focal length
+(EXIF or `--focal-35mm`) replaces the predicted one afterwards, as for MapAnything. Its
+cameras are less accurate (see `../README.md`).
 
 The camera poses are optimized along with the Gaussians (as InstantSplat): per view a
 rotation and a translation on top of MapAnything's pose, view 0 fixed, plus one focal
@@ -59,6 +66,15 @@ residual per frame is printed, a bad alignment shows there), every 10th frame is
 `heldout_<frame>.png` (photo | before | after) per held-out frame in the output directory.
 `--resolution-scale 2` trains at twice the splat's resolution. 98 frames and 3000 steps
 take about 5 minutes.
+
+## In the browser
+
+The rasterizer and the trainer also run on WebGPU, same kernels: `web/` has a
+wasm-bindgen entry point and a page that renders a run's `splat.ply` from its cameras
+(drag to orbit) and continues its optimization against the run's input views; `web/README.md`
+has the build and serve commands. `cargo check --target wasm32-unknown-unknown
+--no-default-features --lib` keeps the crate building for wasm32 (the commands that read
+photos and COLMAP models from disk are native only).
 
 ## Other things in here
 
