@@ -40,18 +40,20 @@ fn attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
 
 /// SwiGLU hidden width: 2/3 of 4 x dim, rounded up to a multiple of 8 (DINOv2's
 /// SwiGLUFFNFused). 4096 for dim 1536.
-fn swiglu_hidden_dim(dim: usize) -> usize {
+pub fn swiglu_hidden_dim(dim: usize) -> usize {
     (dim * 4 * 2 / 3).div_ceil(8) * 8
 }
 
-/// w3(silu(x1) * x2), with [x1, x2] = w12(x).
-struct SwiGlu {
+/// w3(silu(x1) * x2), with [x1, x2] = w12(x). Also the Giant Depth Anything 3 backbone's
+/// feed-forward (depthanything3-rs).
+pub struct SwiGlu {
     w12: Linear,
     w3: Linear,
 }
 
 impl SwiGlu {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+    /// `vb` at the block's `mlp`.
+    pub fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
         let hidden = swiglu_hidden_dim(dim);
         Ok(Self {
             w12: candle_nn::linear(dim, 2 * hidden, vb.pp("w12"))?,

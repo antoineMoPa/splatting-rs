@@ -20,11 +20,12 @@ use crate::variant::{PATCH_SIZE, Variant};
 /// confidence = CONF_MIN + exp(logit)
 const CONF_MIN: f32 = 1.0;
 
-/// A stage of the forward pass, reported to a `Progress` callback once it is done (the
-/// browser shows it; the backbone blocks are where the time goes).
+/// A stage of the forward pass, reported to a `Progress` callback as it starts (the browser
+/// shows the stage running now; on the larger variants the depth head takes minutes on one
+/// CPU thread, so it must be announced before it runs, not after).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
-    /// Backbone block `0..DEPTH`.
+    /// Backbone block `0..depth` of the variant.
     Block(usize),
     DenseHead,
     CameraHead,
@@ -72,6 +73,7 @@ pub struct Prediction {
 }
 
 pub struct DepthAnything3 {
+    variant: Variant,
     backbone: Backbone,
     dense_head: DualDptHead,
     camera_head: CameraHead,
@@ -83,11 +85,16 @@ impl DepthAnything3 {
     pub fn new(variant: Variant, reference_view_strategy: ReferenceViewStrategy, vb: VarBuilder) -> Result<Self> {
         let spec = variant.spec();
         Ok(Self {
+            variant,
             backbone: Backbone::new(spec, vb.pp("backbone.pretrained"))?,
             dense_head: DualDptHead::new(spec, vb.pp("head"))?,
             camera_head: CameraHead::new(spec, vb.pp("cam_dec"))?,
             reference_view_strategy,
         })
+    }
+
+    pub fn variant(&self) -> Variant {
+        self.variant
     }
 
     /// `images`: [views, 3, H, W], ImageNet-normalized, H and W multiples of PATCH_SIZE.
@@ -99,10 +106,10 @@ impl DepthAnything3 {
         let (_, _, height, width) = images.dims4()?;
         let grid = (height / PATCH_SIZE, width / PATCH_SIZE);
         let features = self.backbone.forward(images, self.reference_view_strategy, progress)?;
-        let dense = self.dense_head.forward(&features.layers, grid)?;
         progress(Stage::DenseHead);
-        let pose_encoding = self.camera_head.forward(&features.camera_tokens)?;
+        let dense = self.dense_head.forward(&features.layers, grid)?;
         progress(Stage::CameraHead);
+        let pose_encoding = self.camera_head.forward(&features.camera_tokens)?;
         let logits = dense.depth_logits.to_dtype(DType::F32)?;
         assert_eq!(logits.dim(1)?, DEPTH_CHANNELS);
         Ok(RawPrediction {

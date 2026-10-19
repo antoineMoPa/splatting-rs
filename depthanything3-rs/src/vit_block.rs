@@ -1,12 +1,15 @@
-//! The DINOv2 transformer block of the DA3 backbone: pre-norm attention and GELU MLP, each
-//! scaled by a LayerScale. From `ALT_START` on, the blocks also LayerNorm queries and keys
-//! per head (`qk_norm`) and rotate them with 2D RoPE.
+//! The DINOv2 transformer block of the DA3 backbone: pre-norm attention and a feed-forward
+//! (GELU MLP, or SwiGLU in the Giant), each scaled by a LayerScale. From the variant's
+//! `alt_start` on, the blocks also LayerNorm queries and keys per head (`qk_norm`) and
+//! rotate them with 2D RoPE.
 
 use candle_core::{D, Module, Result, Tensor};
 use candle_nn::{LayerNorm, Linear, VarBuilder};
 
+use mapanything_rs::vit_block::SwiGlu;
+
 use crate::rope::RopeTables;
-use crate::variant::HEAD_DIM;
+use crate::variant::{FeedForward, HEAD_DIM};
 
 /// The blocks' norm1 and norm2 (upstream's `ln_eps`).
 const BLOCK_NORM_EPS: f64 = 1e-6;
@@ -76,6 +79,34 @@ impl Module for Mlp {
     }
 }
 
+/// The block's feed-forward, as the variant's `FeedForward`.
+enum FeedForwardLayer {
+    Mlp(Mlp),
+    SwiGlu(SwiGlu),
+}
+
+impl FeedForwardLayer {
+    /// `vb` at the block's `mlp`.
+    fn new(kind: FeedForward, dim: usize, vb: VarBuilder) -> Result<Self> {
+        Ok(match kind {
+            FeedForward::Mlp => Self::Mlp(Mlp {
+                fc1: candle_nn::linear(dim, dim * MLP_RATIO, vb.pp("fc1"))?,
+                fc2: candle_nn::linear(dim * MLP_RATIO, dim, vb.pp("fc2"))?,
+            }),
+            FeedForward::SwiGlu => Self::SwiGlu(SwiGlu::new(dim, vb)?),
+        })
+    }
+}
+
+impl Module for FeedForwardLayer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Mlp(mlp) => mlp.forward(xs),
+            Self::SwiGlu(swiglu) => swiglu.forward(xs),
+        }
+    }
+}
+
 /// Per-head LayerNorm of the queries and keys, [batch, heads, tokens, HEAD_DIM].
 struct QkNorm {
     q_norm: LayerNorm,
@@ -89,13 +120,12 @@ pub struct VitBlock {
     proj: Linear,
     layer_scale1: Tensor,
     norm2: LayerNorm,
-    mlp: Mlp,
+    mlp: FeedForwardLayer,
     layer_scale2: Tensor,
 }
 
 impl VitBlock {
-    pub fn new(dim: usize, qk_norm: bool, vb: VarBuilder) -> Result<Self> {
-        let hidden = dim * MLP_RATIO;
+    pub fn new(dim: usize, qk_norm: bool, feed_forward: FeedForward, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             norm1: layer_norm(dim, BLOCK_NORM_EPS, vb.pp("norm1"))?,
             qkv: candle_nn::linear(dim, 3 * dim, vb.pp("attn.qkv"))?,
@@ -110,10 +140,7 @@ impl VitBlock {
             proj: candle_nn::linear(dim, dim, vb.pp("attn.proj"))?,
             layer_scale1: vb.get(dim, "ls1.gamma")?,
             norm2: layer_norm(dim, BLOCK_NORM_EPS, vb.pp("norm2"))?,
-            mlp: Mlp {
-                fc1: candle_nn::linear(dim, hidden, vb.pp("mlp.fc1"))?,
-                fc2: candle_nn::linear(hidden, dim, vb.pp("mlp.fc2"))?,
-            },
+            mlp: FeedForwardLayer::new(feed_forward, dim, vb.pp("mlp"))?,
             layer_scale2: vb.get(dim, "ls2.gamma")?,
         })
     }

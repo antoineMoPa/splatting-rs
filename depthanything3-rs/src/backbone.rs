@@ -1,9 +1,8 @@
-//! The DA3 backbone: a DINOv2 ViT (Small or Base) over all views at once. Blocks 0 to
-//! `ALT_START - 1` are plain DINOv2 blocks, one view at a time. From block `ALT_START` on,
-//! the class token is replaced by a learned camera token (one for the reference view, one
-//! for the others), odd blocks attend across all views' tokens and even blocks within each
-//! view, with per-head q/k norms and 2D RoPE (`rope.rs`). The outputs of `OUT_LAYERS` feed
-//! the heads, each as the last within-view block's output concatenated with the block's
+//! The DA3 backbone: a DINOv2 ViT over all views at once. Blocks 0 to `alt_start - 1` are
+//! plain DINOv2 blocks, one view at a time. From block `alt_start` on, the class token is
+//! replaced by a learned camera token (one for the reference view, one for the others), odd
+//! blocks attend across all views' tokens and even blocks within each view, with per-head
+//! q/k norms and 2D RoPE (`rope.rs`). The outputs of the spec's `out_layers` feed the heads, each as the last within-view block's output concatenated with the block's
 //! own (`cat_token`), the latter after the final LayerNorm.
 
 use candle_core::{D, DType, Device, Module, Result, Tensor};
@@ -16,7 +15,7 @@ use crate::reference_view::{
     positions_of_views, select_reference_view,
 };
 use crate::rope::rope_tables;
-use crate::variant::{ALT_START, DEPTH, OUT_LAYERS, PATCH_SIZE, VariantSpec};
+use crate::variant::{PATCH_SIZE, VariantSpec};
 use crate::vit_block::{TORCH_LAYER_NORM_EPS, VitBlock, layer_norm};
 
 /// The positional embedding is trained on a TRAINED_GRID x TRAINED_GRID patch grid (518 px).
@@ -28,7 +27,7 @@ const INTERPOLATE_OFFSET: f64 = 0.1;
 const CAMERA_TOKEN: usize = 0;
 
 pub struct BackboneOutput {
-    /// One per `OUT_LAYERS`: the patch tokens [views, patches, 2 * dim], in input order.
+    /// One per `out_layers`: the patch tokens [views, patches, 2 * dim], in input order.
     pub layers: [Tensor; 4],
     /// The camera tokens of the last output layer, [views, 2 * dim], before any norm.
     pub camera_tokens: Tensor,
@@ -38,6 +37,8 @@ pub struct BackboneOutput {
 
 pub struct Backbone {
     dim: usize,
+    alt_start: usize,
+    out_layers: [usize; 4],
     patch_embed: Conv2d,
     cls_token: Tensor,
     /// [1, 2, dim]: the reference view's camera token, then the other views'.
@@ -74,6 +75,8 @@ impl Backbone {
         };
         Ok(Self {
             dim,
+            alt_start: spec.alt_start,
+            out_layers: spec.out_layers,
             patch_embed: candle_nn::conv2d(3, dim, PATCH_SIZE, patch_config, vb.pp("patch_embed.proj"))?,
             cls_token: vb.get((1, 1, dim), "cls_token")?,
             camera_token: vb.get((1, 2, dim), "camera_token")?,
@@ -81,8 +84,10 @@ impl Backbone {
                 .get((1, 1 + TRAINED_GRID * TRAINED_GRID, dim), "pos_embed")?
                 .to_dtype(DType::F32)?
                 .to_device(&Device::Cpu)?,
-            blocks: (0..DEPTH)
-                .map(|index| VitBlock::new(dim, index >= ALT_START, vb.pp(format!("blocks.{index}"))))
+            blocks: (0..spec.depth)
+                .map(|index| {
+                    VitBlock::new(dim, index >= spec.alt_start, spec.feed_forward, vb.pp(format!("blocks.{index}")))
+                })
                 .collect::<Result<_>>()?,
             norm: layer_norm(dim, TORCH_LAYER_NORM_EPS, vb.pp("norm"))?,
         })
@@ -158,10 +163,11 @@ impl Backbone {
         let mut order: Vec<usize> = (0..views).collect();
         let mut reference_view = 0;
         let mut within_view_output = xs.clone();
-        let mut layers = Vec::with_capacity(OUT_LAYERS.len());
+        let mut layers = Vec::with_capacity(self.out_layers.len());
         let mut camera_tokens = None;
         for (index, block) in self.blocks.iter().enumerate() {
-            if index + 1 == ALT_START && views >= MIN_VIEWS_FOR_SELECTION {
+            progress(Stage::Block(index));
+            if index + 1 == self.alt_start && views >= MIN_VIEWS_FOR_SELECTION {
                 let class_tokens = xs
                     .narrow(1, CAMERA_TOKEN, 1)?
                     .squeeze(1)?
@@ -172,13 +178,13 @@ impl Backbone {
                 let indices = Tensor::new(order.iter().map(|&v| v as u32).collect::<Vec<_>>(), device)?;
                 xs = xs.index_select(&indices, 0)?;
             }
-            if index == ALT_START {
+            if index == self.alt_start {
                 xs = Tensor::cat(
                     &[self.camera_tokens(views)?, xs.narrow(1, 1, tokens_per_view - 1)?],
                     1,
                 )?;
             }
-            let across_views = index >= ALT_START && index % 2 == 1;
+            let across_views = index >= self.alt_start && index % 2 == 1;
             if across_views {
                 xs = block
                     .forward(
@@ -187,11 +193,11 @@ impl Backbone {
                     )?
                     .reshape((views, tokens_per_view, self.dim))?;
             } else {
-                let rope = (index >= ALT_START).then_some(&within_view_rope);
+                let rope = (index >= self.alt_start).then_some(&within_view_rope);
                 xs = block.forward(&xs, rope)?;
                 within_view_output = xs.clone();
             }
-            if OUT_LAYERS.contains(&index) {
+            if self.out_layers.contains(&index) {
                 let mut out = Tensor::cat(&[&within_view_output, &xs], D::Minus1)?;
                 if order.iter().enumerate().any(|(position, &view)| position != view) {
                     let positions = positions_of_views(&order);
@@ -205,7 +211,6 @@ impl Backbone {
                 let across = self.norm.forward(&out.narrow(2, self.dim, self.dim)?)?;
                 layers.push(Tensor::cat(&[within, across], D::Minus1)?.narrow(1, 1, tokens_per_view - 1)?);
             }
-            progress(Stage::Block(index));
         }
         Ok(BackboneOutput {
             layers: layers.try_into().expect("4 output layers"),

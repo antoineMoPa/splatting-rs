@@ -33,7 +33,7 @@ Gaussian per 2x2 pixels) trade time for quality.
 
 `--network da3-small` replaces MapAnything with Depth Anything 3 Small
 (`../depthanything3-rs`, 137 MB of weights instead of 4.9 GB, 2 s instead of 12 s for 6
-photos): it predicts depth and cameras, including the focal length; a known focal length
+photos; `da3-base`, `da3-large` and `da3-giant` are the bigger variants, 542 MB to 5.4 GB): it predicts depth and cameras, including the focal length; a known focal length
 (EXIF or `--focal-35mm`) replaces the predicted one afterwards, as for MapAnything. Its
 cameras are less accurate (see `../README.md`).
 

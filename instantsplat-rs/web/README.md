@@ -2,26 +2,33 @@
 
 Live at https://antoinemopa.github.io/splatting-rs/.
 
-Photos in, a trained Gaussian splat out, nothing but the browser: Depth Anything 3 Small
-(`../../depthanything3-rs`, 34 M parameters) predicts depth and cameras from the photos
-on candle's CPU backend compiled to wasm, one Gaussian per point (`init_from_points`,
-stride 2), then the rasterizer and the trainer of `..` optimize them on WebGPU, with the
-same WGSL kernels as the native build. The page first asks for one click to download the
-137 MB model (skipped on later visits, the browser keeps it); then picking photos runs the
-whole chain, 300 training steps included; then drag to look around and download
+Photos in, a trained Gaussian splat out, nothing but the browser: Depth Anything 3
+(`../../depthanything3-rs`; Small, Base or Large, chosen in a dropdown)
+predicts depth and cameras from the photos on candle's CPU backend compiled to wasm, one
+Gaussian per point (`init_from_points`, stride 2), then the rasterizer and the trainer of
+`..` optimize them on WebGPU, with the same WGSL kernels as the native build. The page
+first asks for one click to download the chosen model, 137 MB for Small, 542 MB for Base or 1644 MB for Large
+(skipped on later visits, the browser keeps each one it downloaded); then picking photos
+runs the whole chain, 300 training steps included; then drag to look around and download
 `splat.ply`. The view is rendered at the photos' height and at least 4:3 wide (a wider
 frame at the same focal length, so portrait photos still give a landscape view).
 "Advanced" has the camera choice, more training and loading a `fit` run.
+`?steps=N` changes the 300 training steps; `?steps=0` shows the network's Gaussians untrained.
 
 ![The page after reconstructing the six duck photos](demo.png)
 
 The network runs in a Web Worker (`worker.js`), so the page stays responsive; it reports
 each backbone block. The weights (`model.safetensors` of
-[depth-anything/DA3-SMALL](https://huggingface.co/depth-anything/DA3-SMALL)) are fetched
-from Hugging Face behind the download button and kept in the browser's Cache API; the
-page asks the worker whether they are cached and, if so, loads them without asking. The
-focal length comes from the photos' EXIF when present, else from the network's own
-prediction.
+[depth-anything/DA3-SMALL](https://huggingface.co/depth-anything/DA3-SMALL) or
+[depth-anything/DA3-BASE](https://huggingface.co/depth-anything/DA3-BASE)) are fetched
+from Hugging Face behind the download button and kept in the browser's Cache API, one
+entry per model; the page asks the worker whether the selected model is cached and, if
+so, loads it without asking, so switching models is instant once both are downloaded.
+Giant (5.4 GB) is native only: its weights alone exceed wasm32's 4 GB memory. The depth
+head runs one view at a time so Large fits. Large takes about 7 minutes for the six duck
+photos on one CPU thread. Every worker answer names the model it refers to and the page checks it against the
+dropdown. The focal length comes from the photos' EXIF when present, else from the
+network's own prediction.
 
 Measured in headless Chrome on an M5 for the six 3024x4032 duck photos (`.example/`,
 inputs at 378x504): weights download 7 s (then cached), preprocessing 0.14 s, Depth

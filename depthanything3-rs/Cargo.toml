@@ -2,7 +2,7 @@
 name = "depthanything3-rs"
 version = "0.1.0"
 edition = "2024"
-description = "Depth Anything 3 (Small, Base) multi-view depth and camera estimation from images, on candle"
+description = "Depth Anything 3 (Small to Giant) multi-view depth and camera estimation from images, on candle"
 license = "Apache-2.0"
 readme = "README.md"
 

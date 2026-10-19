@@ -43,6 +43,7 @@ pub mod sort;
 pub mod splat_ply;
 pub mod training;
 pub mod training_frames;
+pub mod turntable;
 pub mod view_error;
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! Which view the backbone treats as the reference (the one whose camera frame is the
 //! world, and which gets the reference camera token): with 3 or more views, upstream picks
-//! it from the class tokens after block `ALT_START - 2`, moves it to position 0 for the
+//! it from the class tokens after block `alt_start - 2`, moves it to position 0 for the
 //! rest of the backbone, and puts the outputs back in the input order.
 
 use clap::ValueEnum;

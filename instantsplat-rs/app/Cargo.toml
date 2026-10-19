@@ -1,0 +1,26 @@
+[package]
+name = "instantsplat-app"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop window for instantsplat-rs: photos in, a trained Gaussian splat out"
+license = "Apache-2.0"
+readme = "README.md"
+
+[[bin]]
+name = "instantsplat-app"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+candle-core = "0.11"
+clap = { version = "4", features = ["derive"] }
+depthanything3-rs = { path = "../../depthanything3-rs", default-features = false }
+eframe = "0.37"
+egui = "0.37"
+hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"] }
+instantsplat-rs = { path = ".." }
+rfd = "0.17"
+nalgebra = "0.34"
+wgpu = { version = "30", default-features = false }
+pollster = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }

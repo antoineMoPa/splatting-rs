@@ -31,14 +31,20 @@ pub enum Network {
     /// ByteDance's Depth Anything 3 Small (34 M parameters, 137 MB): predicts its own
     /// intrinsics.
     Da3Small,
-    /// Depth Anything 3 Base (135 M parameters, 541 MB).
+    /// Depth Anything 3 Base (135 M parameters, 542 MB).
     Da3Base,
+    /// Depth Anything 3 Large (411 M parameters, 1.6 GB; CC BY-NC weights).
+    Da3Large,
+    /// Depth Anything 3 Giant (1.36 B parameters, 5.4 GB; CC BY-NC weights).
+    Da3Giant,
 }
 
-const NETWORK_LABELS: [(Network, &str); 3] = [
+const NETWORK_LABELS: [(Network, &str); 5] = [
     (Network::Mapanything, "MapAnything"),
     (Network::Da3Small, "Depth Anything 3 Small"),
     (Network::Da3Base, "Depth Anything 3 Base"),
+    (Network::Da3Large, "Depth Anything 3 Large"),
+    (Network::Da3Giant, "Depth Anything 3 Giant"),
 ];
 
 impl Network {
@@ -79,6 +85,8 @@ pub fn dense_views_from_images(images: &[PathBuf], settings: &NetworkSettings) -
         Network::Mapanything => crate::network_mapanything::dense_views(images, settings),
         Network::Da3Small => crate::network_da3::dense_views(images, settings, depthanything3_rs::variant::Variant::Small),
         Network::Da3Base => crate::network_da3::dense_views(images, settings, depthanything3_rs::variant::Variant::Base),
+        Network::Da3Large => crate::network_da3::dense_views(images, settings, depthanything3_rs::variant::Variant::Large),
+        Network::Da3Giant => crate::network_da3::dense_views(images, settings, depthanything3_rs::variant::Variant::Giant),
     }
 }
 

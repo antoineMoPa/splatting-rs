@@ -16,8 +16,8 @@ use crate::dense_view::DenseView;
 use crate::network::{NetworkSettings, NetworkTiming, device, use_given_intrinsics};
 use crate::pinhole_fit::fit_pinhole;
 
-const WEIGHTS_REPO: &str = "facebook/map-anything-apache";
-const WEIGHTS_FILE: &str = "model.safetensors";
+pub const WEIGHTS_REPO: &str = "facebook/map-anything-apache";
+pub const WEIGHTS_FILE: &str = "model.safetensors";
 
 pub fn dense_views(images: &[PathBuf], settings: &NetworkSettings) -> Result<(Vec<DenseView>, NetworkTiming)> {
     let device = device(settings)?;

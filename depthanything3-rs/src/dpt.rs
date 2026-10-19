@@ -259,7 +259,25 @@ impl DualDptHead {
 
     /// `layers`: the backbone's 4 output layers [views, rows * columns, 2 * dim], for an
     /// image of `rows` x `columns` patches.
-    pub fn forward(&self, layers: &[Tensor; 4], (rows, columns): (usize, usize)) -> Result<DenseOutput> {
+    /// The head over every view, one view at a time: each view's maps are independent of the
+    /// others', and the full-resolution activations of all views at once (gigabytes on the
+    /// Large and Giant variants) do not fit in wasm32's 4 GB memory.
+    pub fn forward(&self, layers: &[Tensor; 4], grid: (usize, usize)) -> Result<DenseOutput> {
+        let views = layers[0].dim(0)?;
+        let (mut depth, mut rays) = (Vec::with_capacity(views), Vec::with_capacity(views));
+        for view in 0..views {
+            let one_view: Vec<Tensor> = layers.iter().map(|layer| layer.narrow(0, view, 1)).collect::<Result<_>>()?;
+            let output = self.forward_views(&one_view.try_into().expect("4 layers"), grid)?;
+            depth.push(output.depth_logits);
+            rays.push(output.ray_logits);
+        }
+        Ok(DenseOutput {
+            depth_logits: Tensor::cat(&depth, 0)?,
+            ray_logits: Tensor::cat(&rays, 0)?,
+        })
+    }
+
+    fn forward_views(&self, layers: &[Tensor; 4], (rows, columns): (usize, usize)) -> Result<DenseOutput> {
         let image_size = (rows * PATCH_SIZE, columns * PATCH_SIZE);
         let mut pyramid = Vec::with_capacity(4);
         for (hook, tokens) in layers.iter().enumerate() {

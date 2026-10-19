@@ -1,7 +1,8 @@
-//! The worker half of the demo (`worker.js`): the photos through Depth Anything 3 Small on
-//! candle's CPU backend (wasm32, one thread), the points cleaned across views, one
-//! Gaussian per point, and the result packed as a `fit` run (`splat.ply`, `cameras.json`,
-//! the input views as RGBA PNGs) for `lib.rs` to load on the main thread. No GPU here: the
+//! The worker half of the demo (`worker.js`): the photos through Depth Anything 3 (Small
+//! or Base, the worker's choice) on candle's CPU backend (wasm32, one thread), the points
+//! cleaned across views, one Gaussian per point, and the result packed as a `fit` run
+//! (`splat.ply`, `cameras.json`, the input views as RGBA PNGs) for `lib.rs` to load on the
+//! main thread. No GPU here: the
 //! network must not freeze the tab, and a worker shares nothing with the page but
 //! messages.
 
@@ -15,19 +16,25 @@ use depthanything3_rs::model::{DepthAnything3, Stage};
 use depthanything3_rs::pipeline::reconstruct_with_progress;
 use depthanything3_rs::preprocess::model_inputs_from_cutouts;
 use depthanything3_rs::reference_view::ReferenceViewStrategy;
-use depthanything3_rs::variant::{DEPTH, Variant};
+use depthanything3_rs::variant::Variant;
 use depthanything3_rs::weights::model_from_safetensors_bytes;
 use instantsplat_rs::cameras_json::write_cameras_json_to;
 use instantsplat_rs::dense_view::DenseView;
 use instantsplat_rs::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
+use instantsplat_rs::network::Network;
 use instantsplat_rs::network_da3::dense_views_from_reconstruction;
 use instantsplat_rs::splat_ply::write_splat_ply_to;
 use mapanything_rs::image_input::{Cutout, cutout_from_bytes};
 use wasm_bindgen::prelude::*;
 use web_time::Instant;
 
-/// The variant whose weights `worker.js` fetches.
-const VARIANT: Variant = Variant::Small;
+/// The networks `worker.js` can load, by the name it sends (the CLI's `--network` names).
+/// Not the Giant: 5.4 GB of f32 weights do not fit wasm32's 4 GB of memory.
+const WORKER_NETWORKS: [(&str, Network, Variant); 3] = [
+    ("da3-small", Network::Da3Small, Variant::Small),
+    ("da3-base", Network::Da3Base, Variant::Base),
+    ("da3-large", Network::Da3Large, Variant::Large),
+];
 /// Upstream's default; every pose is moved to view 0's frame afterwards anyway.
 const REFERENCE_VIEW: ReferenceViewStrategy = ReferenceViewStrategy::SaddleBalanced;
 /// As `fit`'s defaults: one Gaussian per 2x2 pixels, every point the cleaning kept.
@@ -40,7 +47,8 @@ const INIT: InitSettings = InitSettings {
 const MIN_PHOTOS: usize = 2;
 
 thread_local! {
-    static MODEL: RefCell<Option<DepthAnything3>> = const { RefCell::new(None) };
+    /// The loaded network and its model.
+    static MODEL: RefCell<Option<(Network, DepthAnything3)>> = const { RefCell::new(None) };
     /// The photos added since the last `reconstruct`, decoded and cropped to their
     /// foreground, with their file names.
     static PHOTOS: RefCell<Vec<(String, Cutout)>> = const { RefCell::new(Vec::new()) };
@@ -50,14 +58,20 @@ fn js_error(error: anyhow::Error) -> JsError {
     JsError::new(&format!("{error:#}"))
 }
 
-/// Builds the model from the bytes of `model.safetensors` (f32); once per worker.
+/// Builds the model of `network` (a `WORKER_NETWORKS` name, anything else panics) from
+/// the bytes of its `model.safetensors` (f32), replacing the model loaded before, if any.
 #[wasm_bindgen]
-pub fn load_da3(safetensors: Vec<u8>) -> Result<(), JsError> {
-    assert!(MODEL.with(|model| model.borrow().is_none()), "load_da3 called twice");
-    let model = model_from_safetensors_bytes(VARIANT, REFERENCE_VIEW, safetensors, DType::F32, &Device::Cpu)
-        .context("loading the Depth Anything 3 Small weights")
+pub fn load_da3(network: &str, safetensors: Vec<u8>) -> Result<(), JsError> {
+    let (_, network, variant) = *WORKER_NETWORKS
+        .iter()
+        .find(|(name, _, _)| *name == network)
+        .unwrap_or_else(|| panic!("load_da3: unknown network {network:?}"));
+    // The old model is dropped first: the new one's tensors fit in its memory.
+    MODEL.with(|slot| *slot.borrow_mut() = None);
+    let model = model_from_safetensors_bytes(variant, REFERENCE_VIEW, safetensors, DType::F32, &Device::Cpu)
+        .with_context(|| format!("loading the {} weights", network.label()))
         .map_err(js_error)?;
-    MODEL.with(|slot| *slot.borrow_mut() = Some(model));
+    MODEL.with(|slot| *slot.borrow_mut() = Some((network, model)));
     Ok(())
 }
 
@@ -111,9 +125,9 @@ impl Reconstructed {
     }
 }
 
-fn stage_label(stage: Stage) -> String {
+fn stage_label(stage: Stage, depth: usize) -> String {
     match stage {
-        Stage::Block(index) => format!("backbone block {}/{DEPTH}", index + 1),
+        Stage::Block(index) => format!("backbone block {}/{depth}", index + 1),
         Stage::DenseHead => "depth head".to_string(),
         Stage::CameraHead => "camera head".to_string(),
     }
@@ -134,8 +148,8 @@ pub fn reconstruct(focal_35mm: Option<f64>, progress: &js_sys::Function) -> Resu
     let photos = PHOTOS.with(|photos| std::mem::take(&mut *photos.borrow_mut()));
     MODEL.with(|model| {
         let model = model.borrow();
-        let model = model.as_ref().expect("load_da3 first");
-        reconstruct_photos(model, &photos, focal_35mm, &mut |label| {
+        let (network, model) = model.as_ref().expect("load_da3 first");
+        reconstruct_photos(*network, model, &photos, focal_35mm, &mut |label| {
             progress.call1(&JsValue::NULL, &JsValue::from_str(label)).expect("progress callback");
         })
     })
@@ -143,6 +157,7 @@ pub fn reconstruct(focal_35mm: Option<f64>, progress: &js_sys::Function) -> Resu
 }
 
 fn reconstruct_photos(
+    network: Network,
     model: &DepthAnything3,
     photos: &[(String, Cutout)],
     focal_35mm: Option<f64>,
@@ -157,7 +172,9 @@ fn reconstruct_photos(
     progress(&format!("preprocessed {} photos ({known} with a known focal length)", inputs.len()));
 
     let started = Instant::now();
-    let reconstruction = reconstruct_with_progress(model, &inputs, &device, &mut |stage| progress(&stage_label(stage)))?;
+    let depth = model.variant().spec().depth;
+    let reconstruction =
+        reconstruct_with_progress(model, &inputs, &device, &mut |stage| progress(&stage_label(stage, depth)))?;
     let inference = started.elapsed();
 
     let started = Instant::now();
@@ -181,11 +198,12 @@ fn reconstruct_photos(
         input_view_pngs,
         gaussian_count: cloud.len(),
         report: format!(
-            "{} views of {}x{}: preprocessing {:.1?}, Depth Anything 3 Small {:.1?}, {} Gaussians + packing {:.1?}",
+            "{} views of {}x{}: preprocessing {:.1?}, {} {:.1?}, {} Gaussians + packing {:.1?}",
             views.len(),
             views[0].width,
             views[0].height,
             preprocessing,
+            network.label(),
             inference,
             cloud.len(),
             packing

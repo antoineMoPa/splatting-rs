@@ -16,6 +16,7 @@ use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
 use instantsplat_rs::rasterizer::Rasterizer;
 use instantsplat_rs::run_output::CAMERAS_FILE;
 use instantsplat_rs::splat_ply::read_splat_ply;
+use instantsplat_rs::turntable::Turntable;
 
 #[derive(Parser)]
 struct Args {
@@ -44,7 +45,8 @@ fn main() -> Result<()> {
     let (name, camera) = &cameras[args.view];
     let count = cloud.len();
     let centroid = cloud.centroid();
-    let novel = camera.orbited(centroid, args.yaw_degrees.to_radians(), args.pitch_degrees.to_radians());
+    let all: Vec<_> = cameras.iter().map(|(_, camera)| camera.clone()).collect();
+    let novel = Turntable::from_cameras(&all, centroid).view(camera, args.yaw_degrees.to_radians(), args.pitch_degrees.to_radians());
     println!(
         "{count} Gaussians, centroid ({:.3}, {:.3}, {:.3}); view {} ({name}) at ({:.3}, {:.3}, {:.3}) orbited {} deg yaw, {} deg pitch to ({:.3}, {:.3}, {:.3})",
         centroid.x, centroid.y, centroid.z, args.view,

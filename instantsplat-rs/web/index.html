@@ -18,6 +18,8 @@
   .drop strong { display: block; font-size: 18px; }
   .drop span { color: var(--muted); font-size: 14px; }
   .drop input { display: none; }
+  .model { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: -4px 0 12px; color: var(--muted); font-size: 14px; }
+  .model select { font: inherit; color: var(--ink); padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; max-width: 100%; }
   .gate { text-align: center; padding: 12px 0 4px; }
   .gate p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
   [hidden] { display: none !important; }
@@ -46,6 +48,7 @@
   <p class="lead">Turn object photos into a Gaussian splat in your browser.</p>
 
   <div class="card">
+    <label class="model">model <select id="model" disabled></select></label>
     <div class="gate" id="gate" hidden>
       <button id="download-model" class="primary">Download the 137 MB model</button>
     </div>
@@ -85,8 +88,19 @@
 <script type="module">
 import init, * as splat from "./pkg/instantsplat_web.js";
 
-// Steps run on every reconstruction before the result is shown.
-const TRAIN_STEPS = 300;
+// The networks the worker can load, by the name it takes (the CLI's `--network` names),
+// with the size of their weights as the page states it (`weights_megabytes` of
+// depthanything3-rs's variant table).
+const MODELS = {
+  "da3-small": { label: "Depth Anything 3 Small", megabytes: 137 },
+  "da3-base": { label: "Depth Anything 3 Base", megabytes: 542 },
+  "da3-large": { label: "Depth Anything 3 Large", megabytes: 1644 },
+};
+const DEFAULT_MODEL = "da3-small";
+// Steps run on every reconstruction before the result is shown; `?steps=N` overrides it,
+// and `?steps=0` shows the network's Gaussians untrained.
+const TRAIN_STEPS = Number(new URLSearchParams(location.search).get("steps") ?? 300);
+if (!Number.isInteger(TRAIN_STEPS) || TRAIN_STEPS < 0) throw new Error(`?steps= must be a whole number, not ${TRAIN_STEPS}`);
 // Progress bar shares: the model download is its own step; a reconstruction is the
 // network, then training.
 const PROGRESS = { download: [0, 100], reconstruct: [0, 50], train: [50, 100] };
@@ -102,6 +116,8 @@ const inputPhotos = document.getElementById("input-photos");
 const drop = document.getElementById("drop");
 const gate = document.getElementById("gate");
 const downloadModelButton = document.getElementById("download-model");
+const modelSelect = document.getElementById("model");
+modelSelect.replaceChildren(...Object.entries(MODELS).map(([variant, { label, megabytes }]) => new Option(`${label} (${megabytes} MB)`, variant, false, variant === DEFAULT_MODEL)));
 const params = new URLSearchParams(location.search);
 const say = (text) => { status.textContent = text; console.log(text); };
 const showProgress = (stage, fraction) => {
@@ -112,6 +128,11 @@ const showProgress = (stage, fraction) => {
 const hideProgress = () => { progress.classList.remove("on"); progress.value = 0; };
 
 let yaw = 0, pitch = 0, rendering = false, wanted = false, cameraNames = [], photoCount = 0, busy = false;
+// The variant the worker last answered `ready` for; the page only reconstructs with the
+// selected one, and only once the worker has it.
+let loadedModel = null;
+// Busy: a download, a reconstruction or training is running; the model choice waits.
+const setBusy = (value) => { busy = value; modelSelect.disabled = value; };
 
 async function draw() {
   if (rendering) { wanted = true; return; }
@@ -181,32 +202,59 @@ function ask(message, transfer, progress) {
   }).finally(() => { request = null; });
 }
 
-// Fetches (or takes from the cache) and loads the network, then shows the photo picker.
+// Fetches (or takes from the cache) and loads the selected network, then shows the photo
+// picker.
 async function loadModel() {
-  busy = true; downloadModelButton.disabled = true;
+  const variant = modelSelect.value;
+  setBusy(true); downloadModelButton.disabled = true;
   try {
-    await ask({ type: "load" }, [], ({ text, fraction }) => {
+    const answer = await ask({ type: "load", variant }, [], ({ text, fraction }) => {
       showProgress("download", fraction ?? 0);
       say(`${/download/i.test(text) ? "downloading the model" : "loading the model"}: ${text}`);
     });
+    if (answer.variant !== variant) throw new Error(`the worker loaded ${answer.variant}, not ${variant}`);
+    loadedModel = variant;
     hideProgress();
     gate.hidden = true; drop.hidden = false;
-    say("ready: choose your photos.");
+    say(`ready (${MODELS[variant].label}): choose your photos.`);
   } catch (error) {
     hideProgress();
     downloadModelButton.disabled = false;
     say(`error: ${error.message ?? error}`);
     throw error;
   } finally {
-    busy = false;
+    setBusy(false);
   }
 }
 downloadModelButton.onclick = loadModel;
 
+// The selected model: loaded right away when a previous visit cached its weights (true),
+// else offered as a download, the photo picker waiting for it (false).
+async function offerModel() {
+  const variant = modelSelect.value;
+  downloadModelButton.textContent = `Download the ${MODELS[variant].megabytes} MB model`;
+  // Busy while asking too: a model change during the question would be a second request.
+  setBusy(true);
+  let answer;
+  try { answer = await ask({ type: "status", variant }); } finally { setBusy(false); }
+  if (answer.variant !== variant) throw new Error(`the worker answered about ${answer.variant}, not ${variant}`);
+  if (answer.cached) { await loadModel(); return true; }
+  drop.hidden = true; gate.hidden = false; downloadModelButton.disabled = false;
+  return false;
+}
+modelSelect.onchange = async () => {
+  try {
+    if (!(await offerModel())) say(`${MODELS[modelSelect.value].label} is not downloaded yet.`);
+  } catch (error) {
+    say(`error: ${error.message ?? error}`);
+  }
+};
+
 async function photosToSplat(files) {
   if (busy) return;
   if (files.length < 2) { say("pick at least 2 photos"); return; }
-  busy = true; drop.classList.remove("over");
+  if (loadedModel !== modelSelect.value) throw new Error(`${modelSelect.value} is selected but ${loadedModel} is loaded`);
+  setBusy(true); drop.classList.remove("over");
   const started = performance.now();
   const seconds = () => ((performance.now() - started) / 1000).toFixed(0);
   try {
@@ -217,22 +265,25 @@ async function photosToSplat(files) {
     // Focal length: the photos' EXIF when present, else the network's own estimate.
     const result = await ask({ type: "reconstruct", photos, focal35mm: null }, photos.map((photo) => photo.bytes.buffer),
       ({ text, fraction }) => { showProgress("reconstruct", fraction ?? 0); say(`reconstructing: ${text}`); });
+    if (result.variant !== modelSelect.value) throw new Error(`the worker reconstructed with ${result.variant}, not ${modelSelect.value}`);
     console.log(`reconstructed in ${seconds()} s: ${result.report}`);
     const count = await loadScene(new Uint8Array(result.ply), result.camerasJson);
     for (const [i, view] of result.views.entries()) addPhoto(cameraNames[i], new Uint8Array(view));
-    await train(TRAIN_STEPS);
+    if (TRAIN_STEPS > 0) await train(TRAIN_STEPS);
     hideProgress();
-    say(`done in ${seconds()} s: ${count.toLocaleString()} Gaussians from ${photos.length} photos. Drag to look around.`);
+    say(`done in ${seconds()} s: ${count.toLocaleString()} Gaussians from ${photos.length} photos through ${MODELS[result.variant].label}${TRAIN_STEPS > 0 ? "" : ", untrained"}. Drag to look around.`);
   } catch (error) {
     hideProgress();
     say(`error: ${error.message ?? error}`);
     throw error;
   } finally {
-    busy = false;
+    setBusy(false);
   }
 }
 
-inputPhotos.onchange = () => photosToSplat([...inputPhotos.files]);
+// The input is emptied once its photos are taken: a browser fires no change event when
+// the same files are picked again.
+inputPhotos.onchange = () => { const files = [...inputPhotos.files]; inputPhotos.value = ""; photosToSplat(files); };
 drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = (e) => { e.preventDefault(); photosToSplat([...e.dataTransfer.files]); };
@@ -245,9 +296,9 @@ document.getElementById("load-files").onclick = async () => {
 };
 trainButton.onclick = async () => {
   if (busy) return;
-  busy = true;
+  setBusy(true);
   try { await train(Number(document.getElementById("steps").value)); hideProgress(); say("refined. Drag to look around."); }
-  finally { busy = false; }
+  finally { setBusy(false); }
 };
 downloadButton.onclick = () => {
   const link = document.createElement("a");
@@ -281,9 +332,7 @@ try {
   const count = await loadScene(ply, cameras);
   for (const [i, name] of cameraNames.entries()) addPhoto(name, await fetchBytes(`${run}/input_view${i}.png`));
   say(`example: ${count.toLocaleString()} Gaussians from ${cameraNames.length} photos of a rubber duck. Drag to look around, or make your own.`);
-  // The model: offered as a download, or loaded right away when a previous visit cached it.
-  const { cached } = await ask({ type: "status" });
-  if (cached) await loadModel(); else gate.hidden = false;
+  await offerModel();
 } catch (error) {
   say(`error: ${error.message ?? error}`);
   throw error;

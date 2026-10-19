@@ -2,7 +2,7 @@
 //! `ImageData`, and its optimization against photos of the cameras, driven from
 //! `index.html` through wasm-bindgen. One GPU job at a time: a call made while another
 //! awaits the GPU panics. `reconstruct.rs` is the other half, run by `worker.js` in a Web
-//! Worker: photos through Depth Anything 3 Small to a splat for this half to load.
+//! Worker: photos through Depth Anything 3 (Small or Base) to a splat for this half to load.
 
 pub mod reconstruct;
 
@@ -22,6 +22,7 @@ use instantsplat_rs::rasterizer::{Rasterizer, Rendered};
 use instantsplat_rs::splat_ply::{parse_splat_ply, write_splat_ply_to};
 use instantsplat_rs::training::{CameraPoses, Trainer};
 use instantsplat_rs::training_frames::{scale_camera, training_view_from_image};
+use instantsplat_rs::turntable::Turntable;
 use wasm_bindgen::prelude::*;
 use web_sys::ImageData;
 
@@ -155,7 +156,7 @@ fn rgba_over_background(rendered: &Rendered) -> Vec<u8> {
     rgba
 }
 
-/// Camera `view` swung about the Gaussians' centroid (`PinholeCamera::orbited`), rendered
+/// Camera `view` moved on the turntable of the scene's cameras (`Turntable`), rendered
 /// at the preview size over the display background.
 #[wasm_bindgen]
 pub async fn render(view: usize, yaw_degrees: f64, pitch_degrees: f64) -> Result<ImageData, JsError> {
@@ -163,8 +164,10 @@ pub async fn render(view: usize, yaw_degrees: f64, pitch_degrees: f64) -> Result
     assert!(view < scene.cameras.len(), "view {view} of {}", scene.cameras.len());
     let camera = &scene.cameras[view].1;
     let (width, height) = preview_size(camera);
-    let camera = camera
-        .orbited(scene.cloud.centroid(), yaw_degrees.to_radians(), pitch_degrees.to_radians())
+    let cameras: Vec<PinholeCamera> = scene.cameras.iter().map(|(_, camera)| camera.clone()).collect();
+    let turntable = Turntable::from_cameras(&cameras, scene.cloud.centroid());
+    let camera = turntable
+        .view(camera, yaw_degrees.to_radians(), pitch_degrees.to_radians())
         .with_image_size(width, height);
     let rasterizer = match &scene.renderer {
         Renderer::Splat(rasterizer) => rasterizer,

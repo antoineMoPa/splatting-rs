@@ -35,6 +35,18 @@ see `mapanything-rs/examples/` and `instantsplat-rs/examples/`.
 
 The browser demo is live at https://antoinemopa.github.io/splatting-rs/. Locally: `npm install`,
 `npm run build`, `npm start`, then http://localhost:8787/.
+The same page as a desktop window: `cargo run --release -p instantsplat-app` (`instantsplat-rs/app/`).
+
+## Desktop launcher
+
+To open the desktop app from Spotlight, Launchpad or the Dock (macOS):
+
+```
+./install-app.sh
+```
+
+This installs the app with `cargo install` and adds a `splatting-rs` launcher to
+`/Applications` (or `~/Applications`). Rerun it to upgrade.
 
 ## Acknowledgements
 

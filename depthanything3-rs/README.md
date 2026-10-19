@@ -2,17 +2,17 @@
 
 Photos in; per photo a depth map, a confidence map, a camera pose and a focal length out,
 and a coloured point cloud from them. A Rust port of ByteDance's
-[Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3) (Small and Base,
-the Apache 2.0 checkpoints) on [candle](https://github.com/huggingface/candle): all photos
-go through the network in one pass. 137 MB of weights for Small, against MapAnything's
+[Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3) (Small, Base,
+Large and Giant) on [candle](https://github.com/huggingface/candle): all photos go
+through the network in one pass. 137 MB of weights for Small, against MapAnything's
 4.9 GB: the browser-sized stage 1 of this workspace. Runs on Apple Silicon (Metal) or the
 CPU.
 
 ## Setup
 
 A stable Rust toolchain and Xcode's command line tools (Metal). The weights download from
-Hugging Face on first run (`depth-anything/DA3-SMALL`, 137 MB; `--variant base` for
-`DA3-BASE`, 541 MB), no account needed.
+Hugging Face on first run (`depth-anything/DA3-SMALL`, 137 MB; `--variant base|large|giant`
+for `DA3-BASE`, 542 MB, `DA3-LARGE`, 1.6 GB, and `DA3-GIANT`, 5.4 GB), no account needed.
 
 ```
 cargo build --release
@@ -27,7 +27,7 @@ cargo run --release -p depthanything3-rs -- photo1.jpg photo2.jpg photo3.jpg --o
 6 photos take 2 s on an M5 after a 30 ms weight load. The point cloud is in the first
 photo's camera frame, at an arbitrary scale (the depth is not metric).
 
-Other options: `--min-conf` (drop uncertain points), `--variant small|base`,
+Other options: `--min-conf` (drop uncertain points), `--variant small|base|large|giant`,
 `--reference-view`, `--precision f32|f16|bf16`, `--weights <file>`, `--raw-out <file>`
 (dense depth, confidence, points and cameras as safetensors), `--debug-dir <dir>` (depth
 and confidence maps as PNGs), `--cpu`. `--focal-35mm` prints the known focal length next
@@ -43,7 +43,7 @@ get no points and the image is cropped to its foreground first.
   sides rounded to multiples of 14), the network (`backbone.rs` with `vit_block.rs`,
   `rope.rs`, `reference_view.rs`; `dpt.rs` with `uv_embed.rs`; `camera_head.rs`;
   `model.rs`), `pipeline.rs` (depth to points in the first camera's frame, multi-view
-  cleaning from mapanything-rs), `variant.rs` (what differs between Small and Base).
+  cleaning from mapanything-rs), `variant.rs` (what differs between the variants).
 
 ## Limits
 
@@ -58,7 +58,8 @@ get no points and the image is cropped to its foreground first.
 ## License
 
 Apache-2.0 ([LICENSE](LICENSE)), as Depth Anything 3 and its DA3-SMALL and DA3-BASE
-weights. The Large, Giant and Nested checkpoints are CC BY-NC and not used.
+weights. The DA3-LARGE and DA3-GIANT weights are CC BY-NC 4.0 (no commercial use); the
+Nested checkpoints are not supported.
 
 ## Acknowledgements
 

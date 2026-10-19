@@ -1,4 +1,4 @@
-//! Depth Anything 3 (depth-anything/DA3-SMALL, DA3-BASE) on candle: any number of images
+//! Depth Anything 3 (depth-anything/DA3-SMALL, -BASE, -LARGE, -GIANT) on candle: any number of images
 //! in; per view a depth map, its confidence, a camera-to-world pose and intrinsics out, and
 //! from those a point cloud in the first image's camera frame.
 

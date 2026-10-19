@@ -62,8 +62,9 @@ struct FitArgs {
     #[arg(long, default_value_t = 1000)]
     steps: usize,
     /// The network predicting points and cameras: MapAnything (4.9 GB of weights, takes
-    /// the focal length as input) or Depth Anything 3 (137 MB, predicts its own; a given
-    /// focal length replaces it afterwards).
+    /// the focal length as input) or Depth Anything 3 (Small 137 MB, Base 542 MB, Large
+    /// 1.6 GB, Giant 5.4 GB; predicts its own focal length, a given one replaces it
+    /// afterwards).
     #[arg(long, value_enum, default_value = "mapanything")]
     network: Network,
     /// 35 mm-equivalent focal length of the camera, in mm, for every image; overrides EXIF.

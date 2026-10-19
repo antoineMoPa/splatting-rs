@@ -2,7 +2,7 @@
 name = "instantsplat-web"
 version = "0.1.0"
 edition = "2024"
-description = "Browser demo of instantsplat-rs: photos through Depth Anything 3 Small (wasm), then Gaussians rendered and optimized through WebGPU"
+description = "Browser demo of instantsplat-rs: photos through Depth Anything 3 Small or Base (wasm), then Gaussians rendered and optimized through WebGPU"
 license = "Apache-2.0"
 publish = false
 
