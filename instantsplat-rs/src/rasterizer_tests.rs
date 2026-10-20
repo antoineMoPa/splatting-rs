@@ -124,17 +124,18 @@ fn a_gaussian_behind_the_camera_is_culled() {
 }
 
 /// A Gaussian as the CPU reference sees it, with the same conventions as the shaders.
-struct ReferenceGaussian {
-    mean: [f32; 2],
-    conic: [f32; 3],
-    depth: f32,
-    color: [f32; 3],
-    opacity: f32,
-    tile_min: [u32; 2],
-    tile_max: [u32; 2],
+pub(crate) struct ReferenceGaussian {
+    pub(crate) mean: [f32; 2],
+    pub(crate) conic: [f32; 3],
+    pub(crate) depth: f32,
+    pub(crate) color: [f32; 3],
+    pub(crate) opacity: f32,
+    pub(crate) radius: f32,
+    pub(crate) tile_min: [u32; 2],
+    pub(crate) tile_max: [u32; 2],
 }
 
-fn reference_project(cloud: &GaussianCloud, camera: &PinholeCamera) -> Vec<ReferenceGaussian> {
+pub(crate) fn reference_project(cloud: &GaussianCloud, camera: &PinholeCamera) -> Vec<ReferenceGaussian> {
     let (w, t) = camera.world_to_camera();
     (0..cloud.len())
         .filter_map(|g| {
@@ -189,6 +190,7 @@ fn reference_project(cloud: &GaussianCloud, camera: &PinholeCamera) -> Vec<Refer
                 depth: p.z as f32,
                 color: [0, 1, 2].map(|k| (SH_C0 * cloud.sh_dc[g * 3 + k] + 0.5).max(0.0)),
                 opacity: sigmoid(cloud.opacity_logits[g]),
+                radius: radius as f32,
                 tile_min,
                 tile_max,
             })

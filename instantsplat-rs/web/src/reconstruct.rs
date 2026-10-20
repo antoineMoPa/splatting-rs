@@ -1,6 +1,7 @@
 //! The worker half of the demo (`worker.js`): the photos through Depth Anything 3 (Small
 //! or Base, the worker's choice) on candle's CPU backend (wasm32, one thread), the points
-//! cleaned across views, one Gaussian per point, and the result packed as a `fit` run
+//! cleaned across views, the views' point maps put onto each other (cameras along), one
+//! Gaussian per point, and the result packed as a `fit` run
 //! (`splat.ply`, `cameras.json`, the input views as RGBA PNGs) for `lib.rs` to load on the
 //! main thread. No GPU here: the
 //! network must not freeze the tab, and a worker shares nothing with the page but
@@ -23,6 +24,7 @@ use instantsplat_rs::dense_view::DenseView;
 use instantsplat_rs::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
 use instantsplat_rs::network::Network;
 use instantsplat_rs::network_da3::dense_views_from_reconstruction;
+use instantsplat_rs::point_map_alignment::align_point_maps;
 use instantsplat_rs::splat_ply::write_splat_ply_to;
 use mapanything_rs::image_input::{Cutout, cutout_from_bytes};
 use wasm_bindgen::prelude::*;
@@ -178,7 +180,14 @@ fn reconstruct_photos(
     let inference = started.elapsed();
 
     let started = Instant::now();
-    let views = dense_views_from_reconstruction(&reconstruction, &inputs);
+    let mut views = dense_views_from_reconstruction(&reconstruction, &inputs);
+    let alignments = align_point_maps(&mut views);
+    for alignment in &alignments {
+        progress(&alignment.to_string());
+    }
+    let alignment = started.elapsed();
+
+    let started = Instant::now();
     let cloud = gaussians_from_dense_views(&views, INIT);
     let mut splat_ply = Vec::new();
     write_splat_ply_to(&mut splat_ply, &cloud)?;
@@ -198,13 +207,14 @@ fn reconstruct_photos(
         input_view_pngs,
         gaussian_count: cloud.len(),
         report: format!(
-            "{} views of {}x{}: preprocessing {:.1?}, {} {:.1?}, {} Gaussians + packing {:.1?}",
+            "{} views of {}x{}: preprocessing {:.1?}, {} {:.1?}, alignment {:.1?}, {} Gaussians + packing {:.1?}",
             views.len(),
             views[0].width,
             views[0].height,
             preprocessing,
             network.label(),
             inference,
+            alignment,
             cloud.len(),
             packing
         ),

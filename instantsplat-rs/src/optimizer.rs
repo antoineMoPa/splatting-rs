@@ -1,6 +1,7 @@
 //! Adam over the packed Gaussian parameters, on the GPU, with a learning rate per
 //! parameter group, the position rate decaying over the run, and the scale limits
-//! applied after every step.
+//! applied after every step. Its moments can be read back and carried over to another
+//! set of Gaussians (densification, `densify.rs`).
 
 use bytemuck::{Pod, Zeroable};
 
@@ -108,6 +109,12 @@ struct ScaleLimitsUniform {
     _pad: f32,
 }
 
+/// Adam's first and second moments, one float per packed parameter each.
+pub struct AdamMoments {
+    pub first: Vec<f32>,
+    pub second: Vec<f32>,
+}
+
 pub struct Adam {
     count: usize,
     gaussian_count: usize,
@@ -116,6 +123,8 @@ pub struct Adam {
     learning_rates: LearningRates,
     position_scale: f32,
     uniform: wgpu::Buffer,
+    first_moment: wgpu::Buffer,
+    second_moment: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
     bind_group: wgpu::BindGroup,
     clamp_scales: wgpu::ComputePipeline,
@@ -134,13 +143,51 @@ impl Adam {
         position_scale: f32,
     ) -> Self {
         let count = gaussian_count * PARAM_STRIDE;
-        assert_eq!(params.size(), (count * 4) as u64, "params buffer size");
-        assert_eq!(gradients.size(), (count * 4) as u64, "gradients buffer size");
         let first_moment = gpu.storage_buffer("adam first moment", (count * 4) as u64);
         let second_moment = gpu.storage_buffer("adam second moment", (count * 4) as u64);
+        Self::with_state(gpu, params, gradients, gaussian_count, learning_rates, position_scale, 0, first_moment, second_moment)
+    }
+
+    /// This optimizer over another set of Gaussians (`gaussian_count` of them in
+    /// `params`, their gradients in `gradients`) starting from `moments`: the step count
+    /// and learning rates carry on.
+    pub fn resumed(&self, gpu: &Gpu, params: &wgpu::Buffer, gradients: &wgpu::Buffer, gaussian_count: usize, moments: &AdamMoments) -> Self {
+        let count = gaussian_count * PARAM_STRIDE;
+        assert_eq!(moments.first.len(), count, "first moment length");
+        assert_eq!(moments.second.len(), count, "second moment length");
+        let first_moment = gpu.storage_buffer_from("adam first moment", &moments.first);
+        let second_moment = gpu.storage_buffer_from("adam second moment", &moments.second);
+        Self::with_state(
+            gpu,
+            params,
+            gradients,
+            gaussian_count,
+            self.learning_rates,
+            self.position_scale,
+            self.step,
+            first_moment,
+            second_moment,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_state(
+        gpu: &Gpu,
+        params: &wgpu::Buffer,
+        gradients: &wgpu::Buffer,
+        gaussian_count: usize,
+        learning_rates: LearningRates,
+        position_scale: f32,
+        step: u32,
+        first_moment: wgpu::Buffer,
+        second_moment: wgpu::Buffer,
+    ) -> Self {
+        let count = gaussian_count * PARAM_STRIDE;
+        assert_eq!(params.size(), (count * 4) as u64, "params buffer size");
+        assert_eq!(gradients.size(), (count * 4) as u64, "gradients buffer size");
         let settings = AdamStep {
             count: count as u32,
-            step: 0,
+            step,
             beta1: ADAM_BETA1,
             beta2: ADAM_BETA2,
             epsilon: ADAM_EPSILON,
@@ -167,11 +214,13 @@ impl Adam {
         Self {
             count,
             gaussian_count,
-            step: 0,
+            step,
             settings,
             learning_rates,
             position_scale,
             uniform,
+            first_moment,
+            second_moment,
             pipeline,
             bind_group,
             clamp_scales,
@@ -204,6 +253,13 @@ impl Adam {
 
     pub fn steps_taken(&self) -> u32 {
         self.step
+    }
+
+    pub async fn read_moments_async(&self, gpu: &Gpu) -> AdamMoments {
+        AdamMoments {
+            first: gpu.read_back_async(&self.first_moment, self.count).await,
+            second: gpu.read_back_async(&self.second_moment, self.count).await,
+        }
     }
 }
 

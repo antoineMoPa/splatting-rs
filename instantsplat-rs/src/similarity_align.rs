@@ -36,6 +36,28 @@ pub struct CameraPair<'a> {
 pub const MIN_PAIRS: usize = 3;
 
 impl Similarity {
+    pub fn identity() -> Similarity {
+        Similarity {
+            scale: 1.0,
+            rotation: Matrix3::identity(),
+            translation: Vector3::zeros(),
+        }
+    }
+
+    /// `first`, then this one.
+    pub fn after(&self, first: &Similarity) -> Similarity {
+        Similarity {
+            scale: self.scale * first.scale,
+            rotation: self.rotation * first.rotation,
+            translation: self.apply_point(&first.translation),
+        }
+    }
+
+    /// The angle of the rotation, in degrees.
+    pub fn rotation_degrees(&self) -> f64 {
+        ((self.rotation.trace() - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
     pub fn apply_point(&self, point: &Vector3<f64>) -> Vector3<f64> {
         self.scale * (self.rotation * point) + self.translation
     }
@@ -200,6 +222,28 @@ mod tests {
         assert!((found.rotation - truth.rotation).norm() < 1e-9, "rotation {}", found.rotation);
         assert!((found.scale - truth.scale).abs() < 1e-9);
         assert!(residuals.iter().all(|r| r.center_error < 1e-9 && r.direction_error_degrees < 1e-7));
+    }
+
+    #[test]
+    fn composes_in_order() {
+        let first = Similarity {
+            scale: 2.0,
+            rotation: Rotation3::from_euler_angles(0.3, 0.0, -0.5).into_inner(),
+            translation: Vector3::new(1.0, 2.0, 3.0),
+        };
+        let second = Similarity {
+            scale: 0.7,
+            rotation: Rotation3::from_euler_angles(-0.1, 0.9, 0.2).into_inner(),
+            translation: Vector3::new(-2.0, 0.5, 0.0),
+        };
+        let point = Vector3::new(0.4, -1.5, 2.2);
+        let composed = second.after(&first);
+        assert!((composed.apply_point(&point) - second.apply_point(&first.apply_point(&point))).norm() < 1e-12);
+        let quarter = Similarity {
+            rotation: Rotation3::from_euler_angles(0.0, 0.25, 0.0).into_inner(),
+            ..Similarity::identity()
+        };
+        assert!((quarter.rotation_degrees() - 0.25f64.to_degrees()).abs() < 1e-9);
     }
 
     #[test]

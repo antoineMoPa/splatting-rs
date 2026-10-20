@@ -19,6 +19,12 @@ pub struct Gpu {
 /// Largest buffer the kernels may allocate; the adapter must allow it.
 const MAX_BUFFER_BYTES: u64 = 1 << 30;
 
+/// Whether wgpu adds its own bounds checks to every buffer access of the kernels. On Metal
+/// they made a training step 4x slower (158 ms against 36 ms on an M5, `examples/step_timing`),
+/// so native release builds go without; the crate's tests and debug builds keep them so
+/// that an out-of-bounds index still shows. The browser applies its own checks either way.
+const SHADER_RUNTIME_CHECKS: bool = cfg!(any(test, debug_assertions, target_arch = "wasm32"));
+
 impl Gpu {
     /// Requests the adapter and device, blocking; in a browser use `request_async`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -115,12 +121,17 @@ impl Gpu {
     /// Compiles `wgsl` and builds the pipeline of its entry point `entry` (bind group layout
     /// inferred from the shader).
     pub fn compute_pipeline(&self, label: &str, wgsl: &str, entry: &str) -> wgpu::ComputePipeline {
-        let module = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-            });
+        let descriptor = wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        };
+        let module = if SHADER_RUNTIME_CHECKS {
+            self.device.create_shader_module(descriptor)
+        } else {
+            // SAFETY: the kernels are ours and index within the buffers they are given; the
+            // tests and debug builds run them with the checks (`SHADER_RUNTIME_CHECKS`).
+            unsafe { self.device.create_shader_module_trusted(descriptor, wgpu::ShaderRuntimeChecks::unchecked()) }
+        };
         self.device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(label),

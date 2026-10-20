@@ -36,6 +36,7 @@ fn main() -> Result<()> {
         weights: None,
         cpu: false,
         log_every: 100,
+        align_views: true,
         camera_poses: CameraPoses::Refined,
         learning_rates: LEARNING_RATES_3DGS,
         evaluation: None,

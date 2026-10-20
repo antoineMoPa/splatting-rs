@@ -3,7 +3,8 @@
 // world-to-camera rotation and translation and the focal lengths. One thread per Gaussian,
 // writing all PARAM_STRIDE gradients (zeros when culled); the camera gradients are summed
 // over the workgroup's 256 Gaussians into one partial per workgroup
-// (reduce_camera_gradient.wgsl adds the partials up), no atomics.
+// (reduce_camera_gradient.wgsl adds the partials up), no atomics. Each visible Gaussian
+// also adds its screen-space mean gradient to its densification statistics.
 
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> params: array<f32>;
@@ -13,6 +14,11 @@
 @group(0) @binding(5) var<storage, read_write> param_gradients: array<f32>;
 // One CAMERA_GRAD_STRIDE partial per workgroup.
 @group(0) @binding(6) var<storage, read_write> camera_partials: array<f32>;
+// Per Gaussian, summed over the backward passes since they were last cleared
+// (`densify.rs`): the norm of the 2D mean gradient in normalized device coordinates (the
+// pixel gradient times half the image size, as 3DGS thresholds it), the passes it was
+// visible in, and the largest screen radius in pixels.
+@group(0) @binding(7) var<storage, read_write> densify_stats: array<vec4<f32>>;
 
 struct Gradients {
     params: array<f32, PARAM_STRIDE>,
@@ -47,6 +53,14 @@ fn gradients_of(g: u32) -> Gradients {
         d_color += vec3<f32>(intersection_gradients[base + 5u], intersection_gradients[base + 6u], intersection_gradients[base + 7u]);
         d_opacity += intersection_gradients[base + 8u];
     }
+    let half_image = 0.5 * vec2<f32>(f32(camera.width), f32(camera.height));
+    let stats = densify_stats[g];
+    densify_stats[g] = vec4<f32>(
+        stats.x + length(d_mean * half_image),
+        stats.y + 1.0,
+        max(stats.z, f32(p.radius)),
+        0.0,
+    );
 
     // Recompute the forward quantities.
     let base = g * PARAM_STRIDE;

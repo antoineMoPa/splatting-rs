@@ -12,6 +12,7 @@ pub mod camera_pose;
 pub mod cameras_json;
 pub mod colmap_model;
 pub mod dense_view;
+pub mod densify;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod evaluate_against_colmap;
 #[cfg(feature = "networks")]
@@ -28,6 +29,7 @@ pub mod network_da3;
 pub mod network_mapanything;
 pub mod optimizer;
 pub mod pinhole_fit;
+pub mod point_map_alignment;
 pub mod pose_refinement;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod posed_frames;
@@ -46,6 +48,8 @@ pub mod training_frames;
 pub mod turntable;
 pub mod view_error;
 
+#[cfg(test)]
+mod densify_tests;
 #[cfg(test)]
 mod loss_tests;
 #[cfg(test)]

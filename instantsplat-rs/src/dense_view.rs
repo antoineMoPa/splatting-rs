@@ -3,6 +3,7 @@
 
 use crate::camera::PinholeCamera;
 
+#[derive(Clone)]
 pub struct DenseView {
     pub width: usize,
     pub height: usize,

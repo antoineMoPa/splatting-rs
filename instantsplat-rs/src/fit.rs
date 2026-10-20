@@ -1,4 +1,5 @@
-//! The `fit` command: a network (`--network`) on a few photos, one Gaussian per point, a short
+//! The `fit` command: a network (`--network`) on a few photos, the views' point maps put
+//! onto each other (`point_map_alignment.rs`, unless turned off), one Gaussian per point, a short
 //! optimization against those photos with the camera poses refined along (unless turned
 //! off), outputs next to the PLY (the training views as RGBA PNGs, mask as alpha, so that
 //! the optimization can be continued from them, as the browser demo does); optionally
@@ -18,6 +19,7 @@ use crate::gpu::Gpu;
 use crate::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
 use crate::network::{Network, NetworkSettings, dense_views_from_images, image_name};
 use crate::optimizer::{LEARNING_RATES_3DGS, LearningRates};
+use crate::point_map_alignment::align_point_maps;
 use crate::run_output::{CAMERAS_FILE, SPLAT_FILE, output_dir};
 use crate::splat_ply::write_splat_ply;
 use crate::training::{CameraPoses, TrainSettings, Trainer};
@@ -34,6 +36,8 @@ pub struct FitSettings {
     pub weights: Option<PathBuf>,
     pub cpu: bool,
     pub log_every: usize,
+    /// Put the views' point maps onto each other before seeding the Gaussians.
+    pub align_views: bool,
     pub camera_poses: CameraPoses,
     /// `LEARNING_RATES_3DGS` with the camera rates possibly overridden.
     pub learning_rates: LearningRates,
@@ -53,7 +57,7 @@ pub fn run_fit(settings: &FitSettings) -> Result<()> {
     }
     let out_dir = output_dir(&settings.out)?;
 
-    let (views, network_timing) = dense_views_from_images(
+    let (mut views, network_timing) = dense_views_from_images(
         &settings.images,
         &NetworkSettings {
             network: settings.network,
@@ -72,6 +76,14 @@ pub fn run_fit(settings: &FitSettings) -> Result<()> {
         network_timing.inference,
         network_timing.load_weights
     );
+
+    if settings.align_views {
+        let started = Instant::now();
+        for alignment in align_point_maps(&mut views) {
+            println!("{alignment}");
+        }
+        println!("aligned the views' point maps in {:.2?}", started.elapsed());
+    }
 
     let started = Instant::now();
     let cloud = gaussians_from_dense_views(

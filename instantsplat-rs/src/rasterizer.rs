@@ -2,7 +2,8 @@
 //! sort, alpha compositing over nothing, the loss against a ground-truth view (`loss.rs`),
 //! and the backward pass of all of it, down to gradients of the packed Gaussian parameters.
 //! One instance renders one image size against one set of ground-truth views. The
-//! backward pass also sums the gradient with respect to the camera (`CameraGradient`).
+//! backward pass also sums the gradient with respect to the camera (`CameraGradient`), and
+//! adds up per Gaussian what densification decides on (`DensifyStats`).
 //!
 //! The read backs (`read_*_async`, `render_async`) are async so that a browser can await
 //! them; the blocking `read_*` and `render` are native-only `pollster::block_on` wrappers.
@@ -57,6 +58,20 @@ pub struct Projected {
     pub tile_min: [u32; 2],
     pub tile_max: [u32; 2],
     _pad2: [u32; 2],
+}
+
+/// Mirror of one Gaussian's `densify_stats` in `project_backward.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct DensifyStats {
+    /// Sum over the backward passes of the norm of the 2D mean gradient in normalized
+    /// device coordinates (pixel gradient times half the image size).
+    pub mean_gradient_sum: f32,
+    /// Backward passes the Gaussian was visible in.
+    pub visible_count: f32,
+    /// Largest screen radius in pixels over those passes.
+    pub max_radius: f32,
+    pub(crate) _pad: f32,
 }
 
 /// One rendered view: per pixel, the Gaussians' color premultiplied by the pixel's
@@ -130,6 +145,7 @@ pub struct Rasterizer {
     pixel_loss: wgpu::Buffer,
     param_gradients: wgpu::Buffer,
     camera_gradient: wgpu::Buffer,
+    densify_stats: wgpu::Buffer,
     project_forward: wgpu::ComputePipeline,
     scan_tile_counts: wgpu::ComputePipeline,
     emit_tile_keys: wgpu::ComputePipeline,
@@ -244,6 +260,7 @@ impl Rasterizer {
             workgroups(gaussian_count, 256) as u64 * CAMERA_GRAD_STRIDE as u64 * 4,
         );
         let camera_gradient = gpu.storage_buffer("camera gradient", (CAMERA_GRAD_STRIDE * 4) as u64);
+        let densify_stats = gpu.storage_buffer("densify stats", gaussian_count as u64 * 4 * 4);
 
         let project_forward =
             gpu.compute_pipeline("project forward", &shaders::project_forward(), "main");
@@ -341,6 +358,7 @@ impl Rasterizer {
                 &intersection_gradients,
                 &param_gradients,
                 &camera_partials,
+                &densify_stats,
             ],
         );
         let reduce_camera_gradient_group =
@@ -368,6 +386,7 @@ impl Rasterizer {
             pixel_loss,
             param_gradients,
             camera_gradient,
+            densify_stats,
             project_forward,
             scan_tile_counts,
             emit_tile_keys,
@@ -480,6 +499,17 @@ impl Rasterizer {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_param_gradients(&self, gpu: &Gpu) -> Vec<f32> {
         pollster::block_on(self.read_param_gradients_async(gpu))
+    }
+
+    /// Per Gaussian, the densification statistics summed by every `encode_backward` since
+    /// the rasterizer was made: `DensifyStats`.
+    pub async fn read_densify_stats_async(&self, gpu: &Gpu) -> Vec<DensifyStats> {
+        gpu.read_back_async(&self.densify_stats, self.gaussian_count).await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_densify_stats(&self, gpu: &Gpu) -> Vec<DensifyStats> {
+        pollster::block_on(self.read_densify_stats_async(gpu))
     }
 
     /// The camera gradient of the last `encode_backward`.

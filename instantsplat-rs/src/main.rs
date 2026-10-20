@@ -94,6 +94,10 @@ struct FitArgs {
     /// a shared focal scale) along with the Gaussians.
     #[arg(long)]
     no_pose_refinement: bool,
+    /// Seed the Gaussians from the network's point maps as they come, without putting the
+    /// views onto each other first (`point_map_alignment.rs`); for comparison.
+    #[arg(long)]
+    unaligned: bool,
     /// Judge the result afterwards against a COLMAP TXT model of the whole capture
     /// (`cameras.txt`, `images.txt`, naming the input frames): COLMAP's cameras are aligned
     /// onto the optimized ones, the residuals printed, and every `--hold-out-every`-th frame
@@ -162,6 +166,7 @@ fn main() -> Result<()> {
             weights: args.weights,
             cpu: args.cpu,
             log_every: args.log_every,
+            align_views: !args.unaligned,
             camera_poses: if args.no_pose_refinement { CameraPoses::Fixed } else { CameraPoses::Refined },
             learning_rates: LearningRates {
                 camera_rotation: args.camera_rotation_lr.unwrap_or(LEARNING_RATES_3DGS.camera_rotation),

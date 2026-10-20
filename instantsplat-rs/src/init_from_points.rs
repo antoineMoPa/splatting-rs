@@ -1,7 +1,7 @@
 //! One Gaussian per (kept) dense point, as InstantSplat: the position is the point, the
 //! color its pixel, the scale the spacing to the neighboring points, isotropic and
-//! axis-aligned, with a low starting opacity. No densification follows, so this is the
-//! final set of Gaussians.
+//! axis-aligned, with a low starting opacity. Training may densify and prune them
+//! (`densify.rs`).
 
 use crate::dense_view::DenseView;
 use crate::gaussians::{GaussianCloud, logit, rgb_to_sh_dc};

@@ -78,6 +78,10 @@ photos and COLMAP models from disk are native only).
 
 ## Other things in here
 
+- `src/densify.rs`: 3DGS-style densification during training (clone small / split large
+  Gaussians with a high screen-space gradient, prune transparent ones), which the app and
+  the browser demo use (`Trainer::with_densification`); `examples/densify_eval.rs` compares
+  training with and without it on held-out photos and renders between two views.
 - `src/shaders/`: the WGSL kernels (projection, tile binning, radix sort, rasterization,
   their backward passes, Adam).
 - `src/rasterizer_tests.rs`: gradient check of the backward pass against finite

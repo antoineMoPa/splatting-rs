@@ -18,7 +18,8 @@ use instantsplat_rs::dense_view::DenseView;
 use instantsplat_rs::gaussians::GaussianCloud;
 use instantsplat_rs::gpu::Gpu;
 use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
-use instantsplat_rs::optimizer::{LEARNING_RATES_SHORT_RUN, position_rate_factor};
+use instantsplat_rs::densify::DENSIFY_SHORT_RUN;
+use instantsplat_rs::optimizer::LEARNING_RATES_SHORT_RUN;
 use instantsplat_rs::rasterizer::{Rasterizer, Rendered};
 use instantsplat_rs::splat_ply::{parse_splat_ply, write_splat_ply_to};
 use instantsplat_rs::training::{CameraPoses, Trainer};
@@ -57,7 +58,7 @@ enum Renderer {
     Splat(Rasterizer),
     /// Between `start_training` and `finish_training`: the trainer's parameters, which
     /// `preview` (at the preview size; the trainer's own rasterizer is at the photos')
-    /// renders live.
+    /// renders live, rebuilt whenever densification replaces them.
     Training {
         trainer: Trainer<'static>,
         preview: Rasterizer,
@@ -224,7 +225,8 @@ pub fn start_training(steps: usize, refine_poses: bool) {
     assert!(scene.views.len() >= 2, "{} photos: training needs at least 2", scene.views.len());
     assert!(!matches!(scene.renderer, Renderer::Training { .. }), "already training");
     let camera_poses = if refine_poses { CameraPoses::Refined } else { CameraPoses::Fixed };
-    let trainer = Trainer::new(gpu(), &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses);
+    let trainer =
+        Trainer::new(gpu(), &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses).with_densification(DENSIFY_SHORT_RUN);
     let preview = preview_rasterizer(trainer.params(), trainer.gaussian_count(), preview_size(&scene.cameras[0].1));
     scene.renderer = Renderer::Training {
         trainer,
@@ -240,21 +242,21 @@ pub fn start_training(steps: usize, refine_poses: bool) {
 #[wasm_bindgen]
 pub async fn train_steps(count: usize) -> String {
     let mut scene = take_scene();
-    let Renderer::Training { trainer, steps, step, .. } = &mut scene.renderer else {
+    let preview_size = preview_size(&scene.cameras[0].1);
+    let Renderer::Training { trainer, preview, steps, step } = &mut scene.renderer else {
         panic!("not training: start_training first");
     };
     assert!(count > 0, "count");
     assert!(*step < *steps, "every step has been taken; finish_training");
     let last = (*step + count).min(*steps);
-    let view_count = trainer.view_count();
-    let mut view = 0;
     while *step < last {
-        view = *step % view_count;
-        trainer.step_async(view, position_rate_factor(*step, *steps)).await;
+        if trainer.train_step_async(*step, *steps).await.is_some() {
+            *preview = preview_rasterizer(trainer.params(), trainer.gaussian_count(), preview_size);
+        }
         *step += 1;
     }
-    let loss = trainer.log_step_async(*step - 1, view).await;
-    let status = format!("step {}/{}: {loss}", *step, *steps);
+    let loss = trainer.log_step_async(*step - 1, (*step - 1) % trainer.view_count()).await;
+    let status = format!("step {}/{}: {loss}, {} Gaussians", *step, *steps, trainer.gaussian_count());
     put_scene(scene);
     status
 }
@@ -280,10 +282,11 @@ pub async fn finish_training() -> String {
         .map(|(view, refined)| pose_distance(refined, &view.camera).0)
         .fold(0.0, f64::max);
     let summary = format!(
-        "{} steps in {:.1?}: {}; {}; cameras turned up to {largest_turn:.2}°",
+        "{} steps in {:.1?}: {}; {}; {}; cameras turned up to {largest_turn:.2}°",
         steps,
         report.elapsed,
         report.final_loss,
+        report.densification_summary(),
         report.prune
     );
     // The refined cameras replace the photos' (so that training again starts from them)

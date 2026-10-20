@@ -38,7 +38,7 @@ struct Args {
     start: bool,
     /// The model the window starts with (the dropdown changes it): a Depth Anything 3
     /// variant, or MapAnything.
-    #[arg(long, value_enum, default_value = "da3-small")]
+    #[arg(long, value_enum, default_value = "da3-base")]
     network: Network,
     /// The training steps run on every reconstruction ("Advanced" changes them); 0 shows the
     /// network's Gaussians untrained.

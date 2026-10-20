@@ -2,7 +2,7 @@
 
 The browser demo (`../web`) as a native window: photos in, a trained Gaussian splat out,
 on the Mac's GPU. A model dropdown offers every Depth Anything 3 variant
-(`../../depthanything3-rs`, Small by default, 137 MB downloaded from Hugging Face once)
+(`../../depthanything3-rs`, Base by default, 542 MB downloaded from Hugging Face once)
 and MapAnything; the network predicts depth and cameras on candle's Metal backend, one
 Gaussian per point (`init_from_points`, stride 2), then the rasterizer and the trainer of
 `..` optimize them on wgpu for 300 steps while the view updates live. Choosing or dropping

@@ -26,7 +26,9 @@ use instantsplat_rs::gpu::Gpu;
 use instantsplat_rs::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
 use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
 use instantsplat_rs::network::{Network, NetworkSettings, dense_views_from_images};
-use instantsplat_rs::optimizer::{LEARNING_RATES_SHORT_RUN, position_rate_factor};
+use instantsplat_rs::densify::DENSIFY_SHORT_RUN;
+use instantsplat_rs::optimizer::LEARNING_RATES_SHORT_RUN;
+use instantsplat_rs::point_map_alignment::align_point_maps;
 use instantsplat_rs::rasterizer::Rasterizer;
 use instantsplat_rs::splat_ply::{read_splat_ply, write_splat_ply};
 use instantsplat_rs::training::{CameraPoses, Trainer};
@@ -477,7 +479,7 @@ impl PipelineThread {
         let seconds = || started.elapsed().as_secs_f64().round() as u64;
         self.events.progress(Stage::Reconstruct, 0.0);
         self.events.status(format!("reconstructing {} photos with {}…", photos.len(), network.label()));
-        let (views, timing) = dense_views_from_images(
+        let (mut views, timing) = dense_views_from_images(
             photos,
             &NetworkSettings {
                 network,
@@ -497,6 +499,9 @@ impl PipelineThread {
             timing.load_weights
         ));
 
+        for alignment in align_point_maps(&mut views) {
+            println!("{alignment}");
+        }
         let cloud = gaussians_from_dense_views(&views, INIT);
         let names = photos.iter().map(|photo| file_name(photo)).collect();
         let scene = Scene::new(self.gpu(), names, views, cloud);
@@ -550,21 +555,25 @@ impl PipelineThread {
         let gpu = self.gpu.as_ref().expect("a scene has a GPU");
         let started = Instant::now();
         let turntable = scene.turntable();
-        let mut trainer = Trainer::new(gpu, &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses);
-        let live = preview_rasterizer(gpu, trainer.params(), trainer.gaussian_count(), preview_size(&scene.views[0].camera));
-        let render_live = |orbit: Orbit| render_preview(gpu, &live, &scene.views[orbit.view].camera, &turntable, orbit);
-        self.events.send(Event::Frame(render_live(self.orbit())));
+        let mut trainer =
+            Trainer::new(gpu, &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses).with_densification(DENSIFY_SHORT_RUN);
+        let live_rasterizer = |trainer: &Trainer| preview_rasterizer(gpu, trainer.params(), trainer.gaussian_count(), preview_size(&scene.views[0].camera));
+        let render_live = |live: &Rasterizer, orbit: Orbit| render_preview(gpu, live, &scene.views[orbit.view].camera, &turntable, orbit);
+        let mut live = live_rasterizer(&trainer);
+        self.events.send(Event::Frame(render_live(&live, self.orbit())));
         self.events.progress(stage, 0.0);
 
         let view_count = trainer.view_count();
         for step in 0..steps {
-            let view = step % view_count;
-            trainer.step(view, position_rate_factor(step, steps));
+            if trainer.train_step(step, steps).is_some() {
+                // Densified: the parameters are in a new buffer.
+                live = live_rasterizer(&trainer);
+            }
             let done = step + 1;
             if done % PREVIEW_EVERY == 0 || done == steps {
-                pollster::block_on(trainer.log_step_async(step, view));
+                pollster::block_on(trainer.log_step_async(step, step % view_count));
                 self.drain_renders();
-                self.events.send(Event::Frame(render_live(self.orbit())));
+                self.events.send(Event::Frame(render_live(&live, self.orbit())));
                 self.events.progress(stage, done as f32 / steps as f32);
                 self.events.status(format!(
                     "refining: step {done} of {steps} ({} s)",
@@ -581,8 +590,11 @@ impl PipelineThread {
             .map(|(view, refined)| pose_distance(refined, &view.camera).0)
             .fold(0.0, f64::max);
         println!(
-            "trained: {steps} steps in {:.1?}: {}; {}; cameras turned up to {largest_turn:.2}°",
-            report.elapsed, report.final_loss, report.prune
+            "trained: {steps} steps in {:.1?}: {}; {}; {}; cameras turned up to {largest_turn:.2}°",
+            report.elapsed,
+            report.final_loss,
+            report.densification_summary(),
+            report.prune
         );
         // The refined cameras replace the views' (view 0 is the fixed one), so that more
         // training starts from them.
