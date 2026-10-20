@@ -1,11 +1,14 @@
 //! A desktop window for instantsplat-rs's photos → Gaussian splat chain: the browser
-//! demo's page (`../web/index.html`) without its "Advanced" section. Pick photos (or give
-//! them on the command line), watch the network and the training on the status line and
-//! the live 3D view, drag to look around, save the `.ply`. The chain runs on its own
+//! demo's page (`../web/index.html`). Pick photos (or give them on the command line),
+//! watch the network and the training on the status line and the live 3D view, drag to
+//! look around, save the `.ply`; "Advanced" (`advanced.rs`) has the same controls as the
+//! page's: the photo to view from, the training, more training, loading a `fit` run. The
+//! chain runs on its own
 //! thread with its own GPU device (`pipeline.rs`), and only once the start button is
 //! clicked (it names the model download when the model is not cached yet); this
 //! file is the window.
 
+mod advanced;
 mod look;
 mod pipeline;
 mod weights;
@@ -17,9 +20,10 @@ use egui::{
     CentralPanel, ColorImage, ComboBox, CornerRadius, CursorIcon, Frame, Image, RichText, ScrollArea, Sense, TextureHandle, TextureOptions, Vec2,
 };
 use instantsplat_rs::network::Network;
+use instantsplat_rs::training::CameraPoses;
 
 use crate::look::{BODY_SIZE, FOOTER_SIZE, HEADING_SIZE, SMALL_SIZE, VIEW_RADIUS, VIEW_SHADOW};
-use crate::pipeline::{Event, MIN_PHOTOS, Orbit, PHOTO_EXTENSIONS, Worker};
+use crate::pipeline::{DEFAULT_TRAIN_STEPS, Event, MIN_PHOTOS, Orbit, PHOTO_EXTENSIONS, Training, Worker};
 use crate::weights::{ModelChoice, model_choices};
 
 /// Photos to a Gaussian splat, in a window: a network predicts points and cameras, one
@@ -36,6 +40,17 @@ struct Args {
     /// variant, or MapAnything.
     #[arg(long, value_enum, default_value = "da3-small")]
     network: Network,
+    /// The training steps run on every reconstruction ("Advanced" changes them); 0 shows the
+    /// network's Gaussians untrained.
+    #[arg(long, default_value_t = DEFAULT_TRAIN_STEPS)]
+    steps: usize,
+    /// Train with the cameras fixed where the network put them ("Advanced" has the box).
+    #[arg(long)]
+    fixed_poses: bool,
+    /// Load this `fit` run (splat.ply, cameras.json, input_view{i}.png) at start, as
+    /// "Advanced"'s "Load a run" would.
+    #[arg(long, conflicts_with_all = ["photos", "start"])]
+    run: Option<PathBuf>,
     /// Write a PNG of the window here once it is idle (after the run with --start), for
     /// tests.
     #[arg(long)]
@@ -85,10 +100,15 @@ struct App {
     status: String,
     /// The bar's fill, or hidden.
     progress: Option<f32>,
-    /// A reconstruction is running: no picking, no saving.
+    /// A reconstruction, a run load or training is running: no picking, no saving.
     busy: bool,
-    /// A trained splat is there to save.
+    /// A splat is there to save and to train.
     has_scene: bool,
+    /// The scene's photos, by name: the views to look from.
+    photo_names: Vec<String>,
+    /// "Advanced"'s training steps and box.
+    train_steps: usize,
+    refine_poses: bool,
     /// Photos from the command line, waiting for the start button.
     chosen: Vec<PathBuf>,
     preview: Option<TextureHandle>,
@@ -114,6 +134,9 @@ impl App {
             progress: None,
             busy: false,
             has_scene: false,
+            photo_names: Vec::new(),
+            train_steps: args.steps,
+            refine_poses: !args.fixed_poses,
             chosen: Vec::new(),
             preview: None,
             preview_size: PLACEHOLDER_SIZE,
@@ -122,7 +145,9 @@ impl App {
             screenshot: args.screenshot.map(|path| (path, SCREENSHOT_SETTLE_FRAMES)),
             save_to: args.save_to,
         };
-        if args.start {
+        if let Some(dir) = args.run {
+            app.load_run(dir);
+        } else if args.start {
             app.start(args.photos);
         } else if !args.photos.is_empty() {
             app.choose(args.photos);
@@ -163,7 +188,29 @@ impl App {
         self.orbit = Orbit::default();
         self.status = format!("reconstructing {} photos…", photos.len());
         self.progress = Some(0.0);
-        self.worker.reconstruct(photos, self.network);
+        self.worker.reconstruct(photos, self.network, self.training());
+    }
+
+    /// "Advanced"'s training settings.
+    fn training(&self) -> Training {
+        Training {
+            steps: self.train_steps,
+            camera_poses: if self.refine_poses { CameraPoses::Refined } else { CameraPoses::Fixed },
+        }
+    }
+
+    fn load_run(&mut self, dir: PathBuf) {
+        assert!(!self.busy, "load_run while busy");
+        self.busy = true;
+        self.worker.load_run(dir);
+    }
+
+    /// More training on the scene, "Advanced"'s steps of it.
+    fn train_more(&mut self) {
+        assert!(!self.busy && self.has_scene && self.train_steps > 0, "train_more without a scene or steps, or while busy");
+        self.busy = true;
+        self.progress = Some(0.0);
+        self.worker.train(self.training());
     }
 
     /// The small model dropdown under its label, disabled while a run uses the model chosen.
@@ -195,6 +242,10 @@ impl App {
                         Some(texture) => texture.set(image, TextureOptions::LINEAR),
                         None => self.preview = Some(ctx.load_texture(PREVIEW_TEXTURE, image, TextureOptions::LINEAR)),
                     }
+                }
+                Event::Photos(names) => {
+                    self.photo_names = names;
+                    self.orbit = Orbit::default();
                 }
                 Event::Finished { ok } => {
                     self.busy = false;
@@ -349,6 +400,8 @@ impl eframe::App for App {
                         self.photos_card(ui, hovering_files);
                         ui.add_space(look::CARD_GAP - ui.spacing().item_spacing.y);
                         self.view_card(ui, window_height);
+                        ui.add_space(look::CARD_GAP - ui.spacing().item_spacing.y);
+                        self.advanced_card(ui);
                         ui.add_space(24.0 - ui.spacing().item_spacing.y);
                         look::muted(
                             ui,

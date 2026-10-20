@@ -12,12 +12,13 @@ use std::io::Cursor;
 use anyhow::{Context, Result, ensure};
 use image::GenericImageView;
 use instantsplat_rs::camera::PinholeCamera;
+use instantsplat_rs::camera_pose::pose_distance;
 use instantsplat_rs::cameras_json::parse_cameras_json;
 use instantsplat_rs::dense_view::DenseView;
 use instantsplat_rs::gaussians::GaussianCloud;
 use instantsplat_rs::gpu::Gpu;
 use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
-use instantsplat_rs::optimizer::{LEARNING_RATES_3DGS, position_rate_factor};
+use instantsplat_rs::optimizer::{LEARNING_RATES_SHORT_RUN, position_rate_factor};
 use instantsplat_rs::rasterizer::{Rasterizer, Rendered};
 use instantsplat_rs::splat_ply::{parse_splat_ply, write_splat_ply_to};
 use instantsplat_rs::training::{CameraPoses, Trainer};
@@ -45,6 +46,8 @@ struct Scene {
     cameras: Vec<(String, PinholeCamera)>,
     /// Views of the cameras with a photo (`add_photo`), in the order added.
     views: Vec<DenseView>,
+    /// The camera name of each of `views`.
+    view_names: Vec<String>,
     renderer: Renderer,
 }
 
@@ -130,6 +133,7 @@ pub fn load_scene(ply: &[u8], cameras_json: &str) -> Result<usize, JsError> {
         cloud,
         cameras,
         views: Vec::new(),
+        view_names: Vec::new(),
         renderer,
     });
     Ok(count)
@@ -203,6 +207,7 @@ pub fn add_photo(name: &str, encoded: &[u8]) -> Result<usize, JsError> {
         );
         let view = training_view_from_image(image, name, &scale_camera(camera, width, height), (camera.width, camera.height))?;
         scene.views.push(view);
+        scene.view_names.push(name.to_string());
         Ok(scene.views.len())
     })();
     put_scene(scene);
@@ -210,14 +215,16 @@ pub fn add_photo(name: &str, encoded: &[u8]) -> Result<usize, JsError> {
 }
 
 /// Starts optimizing the splat against the photos added, for `steps` steps run by
-/// `train_steps`; the poses stay fixed.
+/// `train_steps`; with `refine_poses`, the poses and a shared focal scale are optimized
+/// along with it.
 #[wasm_bindgen]
-pub fn start_training(steps: usize) {
+pub fn start_training(steps: usize, refine_poses: bool) {
     let mut scene = take_scene();
     assert!(steps > 0, "steps");
     assert!(scene.views.len() >= 2, "{} photos: training needs at least 2", scene.views.len());
     assert!(!matches!(scene.renderer, Renderer::Training { .. }), "already training");
-    let trainer = Trainer::new(gpu(), &scene.cloud, &scene.views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
+    let camera_poses = if refine_poses { CameraPoses::Refined } else { CameraPoses::Fixed };
+    let trainer = Trainer::new(gpu(), &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses);
     let preview = preview_rasterizer(trainer.params(), trainer.gaussian_count(), preview_size(&scene.cameras[0].1));
     scene.renderer = Renderer::Training {
         trainer,
@@ -266,13 +273,30 @@ pub async fn finish_training() -> String {
         unreachable!();
     };
     let report = trainer.finish_async().await;
+    let largest_turn = scene
+        .views
+        .iter()
+        .zip(&report.cameras)
+        .map(|(view, refined)| pose_distance(refined, &view.camera).0)
+        .fold(0.0, f64::max);
     let summary = format!(
-        "{} steps in {:.1?}: {}; {}",
+        "{} steps in {:.1?}: {}; {}; cameras turned up to {largest_turn:.2}°",
         steps,
         report.elapsed,
         report.final_loss,
         report.prune
     );
+    // The refined cameras replace the photos' (so that training again starts from them)
+    // and, at the size of cameras.json, the scene's (render, the turntable).
+    for ((view, name), refined) in scene.views.iter_mut().zip(&scene.view_names).zip(&report.cameras) {
+        view.camera = refined.clone();
+        let (_, camera) = scene
+            .cameras
+            .iter_mut()
+            .find(|(camera_name, _)| camera_name == name)
+            .expect("every view has a camera in cameras.json");
+        *camera = scale_camera(refined, camera.width, camera.height);
+    }
     scene.cloud = report.cloud;
     scene.renderer = splat_renderer(&scene.cloud, preview);
     put_scene(scene);

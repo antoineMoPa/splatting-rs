@@ -35,9 +35,18 @@
   button:disabled { opacity: .45; cursor: default; }
   details { color: var(--muted); font-size: 14px; }
   details summary { cursor: pointer; }
-  details .row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 10px; }
-  details input[type=number] { width: 6em; font: inherit; padding: 4px 6px; }
-  details select { font: inherit; padding: 4px 6px; max-width: 100%; }
+  details summary { color: var(--ink); }
+  .settings { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 16px; align-items: center; margin-top: 16px; }
+  .settings .key { color: var(--ink); }
+  .settings .note, .settings .second { grid-column: 2; }
+  .settings .note { margin-top: -6px; font-size: 13px; }
+  .settings .inline { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .settings input[type=number] { width: 5.5em; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; }
+  .settings select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; justify-self: start; max-width: 100%; }
+  .settings button { padding: 6px 14px; }
+  .file-button { justify-self: start; padding: 6px 14px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
+  .file-button.disabled { opacity: .45; cursor: default; pointer-events: none; }
+  .file-button input { display: none; }
   footer { color: var(--muted); font-size: 13px; margin-top: 24px; }
   footer a { color: inherit; }
 </style>
@@ -69,17 +78,21 @@
 
   <details class="card">
     <summary>Advanced</summary>
-    <div class="row">
-      <label>view from photo <select id="view"></select></label>
-    </div>
-    <div class="row">
-      <label>train <input type="number" id="steps" value="300" min="1"> more steps</label>
-      <button id="train" disabled>Train</button>
-    </div>
-    <div class="row">
-      <label>splat.ply <input type="file" id="ply" accept=".ply"></label>
-      <label>cameras.json <input type="file" id="cameras" accept=".json"></label>
-      <button id="load-files">Load a run</button>
+    <div class="settings">
+      <label for="view" class="key">View from</label>
+      <select id="view"></select>
+
+      <label for="steps" class="key">Training</label>
+      <div class="inline">
+        <span><input type="number" id="steps" min="0" step="1"> steps</span>
+        <label><input type="checkbox" id="refine-poses" checked> refine camera poses</label>
+      </div>
+      <span class="note">Run on every reconstruction; 0 shows the network's Gaussians untrained.</span>
+      <div class="second"><button id="train" disabled>Train more</button></div>
+
+      <span class="key">Load a run</span>
+      <label class="file-button" id="load-run">Choose files…<input type="file" id="run-files" accept=".ply,.json,.png" multiple></label>
+      <span class="note">A <code>fit</code> run: its splat.ply, cameras.json and input_view photos.</span>
     </div>
   </details>
 
@@ -97,10 +110,12 @@ const MODELS = {
   "da3-large": { label: "Depth Anything 3 Large", megabytes: 1644 },
 };
 const DEFAULT_MODEL = "da3-small";
-// Steps run on every reconstruction before the result is shown; `?steps=N` overrides it,
-// and `?steps=0` shows the network's Gaussians untrained.
-const TRAIN_STEPS = Number(new URLSearchParams(location.search).get("steps") ?? 300);
-if (!Number.isInteger(TRAIN_STEPS) || TRAIN_STEPS < 0) throw new Error(`?steps= must be a whole number, not ${TRAIN_STEPS}`);
+// Steps run on every reconstruction before the result is shown, and by "Train more" (the
+// "Training" field under "Advanced", which `?steps=N` presets); 0 shows the network's
+// Gaussians untrained.
+const DEFAULT_TRAIN_STEPS = 300;
+// A `fit` run's photo of camera i (cameras.json order), as `fit` writes it.
+const RUN_PHOTO = /^input_view(\d+)\.png$/;
 // Progress bar shares: the model download is its own step; a reconstruction is the
 // network, then training.
 const PROGRESS = { download: [0, 100], reconstruct: [0, 50], train: [50, 100] };
@@ -111,6 +126,10 @@ const canvas = document.getElementById("canvas");
 const context = canvas.getContext("2d");
 const viewSelect = document.getElementById("view");
 const trainButton = document.getElementById("train");
+const stepsInput = document.getElementById("steps");
+const refinePoses = document.getElementById("refine-poses");
+const runFiles = document.getElementById("run-files");
+const loadRun = document.getElementById("load-run");
 const downloadButton = document.getElementById("download");
 const inputPhotos = document.getElementById("input-photos");
 const drop = document.getElementById("drop");
@@ -119,6 +138,7 @@ const downloadModelButton = document.getElementById("download-model");
 const modelSelect = document.getElementById("model");
 modelSelect.replaceChildren(...Object.entries(MODELS).map(([variant, { label, megabytes }]) => new Option(`${label} (${megabytes} MB)`, variant, false, variant === DEFAULT_MODEL)));
 const params = new URLSearchParams(location.search);
+stepsInput.value = params.get("steps") ?? DEFAULT_TRAIN_STEPS;
 const say = (text) => { status.textContent = text; console.log(text); };
 const showProgress = (stage, fraction) => {
   const [from, to] = PROGRESS[stage];
@@ -131,8 +151,28 @@ let yaw = 0, pitch = 0, rendering = false, wanted = false, cameraNames = [], pho
 // The variant the worker last answered `ready` for; the page only reconstructs with the
 // selected one, and only once the worker has it.
 let loadedModel = null;
-// Busy: a download, a reconstruction or training is running; the model choice waits.
-const setBusy = (value) => { busy = value; modelSelect.disabled = value; };
+// Busy: a download, a reconstruction or training is running; the model choice, loading a
+// run and more training wait.
+const setBusy = (value) => {
+  busy = value; modelSelect.disabled = value; runFiles.disabled = value; loadRun.classList.toggle("disabled", value);
+  updateTrainButton();
+};
+
+// The "Training" field: a whole number of steps, 0 or more.
+function trainingSteps() {
+  const steps = Number(stepsInput.value);
+  if (stepsInput.value === "" || !Number.isInteger(steps) || steps < 0) throw new Error(`training steps must be a whole number, not "${stepsInput.value}"`);
+  return steps;
+}
+
+// "Train N more steps", while there are photos to train against and steps to take.
+function updateTrainButton() {
+  let steps = 0;
+  try { steps = trainingSteps(); } catch { /* the button stays disabled until the field is a number */ }
+  trainButton.textContent = `Train ${steps} more steps`;
+  trainButton.disabled = busy || photoCount < 2 || steps === 0;
+}
+stepsInput.oninput = updateTrainButton;
 
 async function draw() {
   if (rendering) { wanted = true; return; }
@@ -151,7 +191,7 @@ async function loadScene(ply, camerasJson) {
   cameraNames = splat.camera_names();
   viewSelect.replaceChildren(...cameraNames.map((name, i) => new Option(`${i}: ${name}`, i)));
   photoCount = 0;
-  trainButton.disabled = true;
+  updateTrainButton();
   downloadButton.disabled = false;
   yaw = 0; pitch = 0;
   await draw();
@@ -160,13 +200,14 @@ async function loadScene(ply, camerasJson) {
 
 function addPhoto(name, bytes) {
   photoCount = splat.add_photo(name, bytes);
-  trainButton.disabled = photoCount < 2;
+  updateTrainButton();
 }
 
+// `steps` steps on the scene's photos, camera poses refined when the box is ticked.
 async function train(steps) {
-  trainButton.disabled = true; viewSelect.disabled = true; canvas.style.cursor = "wait";
+  viewSelect.disabled = true; canvas.style.cursor = "wait";
   const started = performance.now();
-  splat.start_training(steps);
+  splat.start_training(steps, refinePoses.checked);
   let done = 0;
   while (done < steps) {
     const line = await splat.train_steps(Math.min(10, steps - done));
@@ -178,7 +219,7 @@ async function train(steps) {
   const summary = await splat.finish_training();
   console.log(`trained: ${summary}`);
   await draw();
-  trainButton.disabled = false; viewSelect.disabled = false; canvas.style.cursor = "grab";
+  viewSelect.disabled = false; canvas.style.cursor = "grab";
 }
 
 // Depth Anything 3 runs in a worker (the network takes a while on one CPU thread and must
@@ -254,6 +295,7 @@ async function photosToSplat(files) {
   if (busy) return;
   if (files.length < 2) { say("pick at least 2 photos"); return; }
   if (loadedModel !== modelSelect.value) throw new Error(`${modelSelect.value} is selected but ${loadedModel} is loaded`);
+  const steps = trainingSteps();
   setBusy(true); drop.classList.remove("over");
   const started = performance.now();
   const seconds = () => ((performance.now() - started) / 1000).toFixed(0);
@@ -269,9 +311,9 @@ async function photosToSplat(files) {
     console.log(`reconstructed in ${seconds()} s: ${result.report}`);
     const count = await loadScene(new Uint8Array(result.ply), result.camerasJson);
     for (const [i, view] of result.views.entries()) addPhoto(cameraNames[i], new Uint8Array(view));
-    if (TRAIN_STEPS > 0) await train(TRAIN_STEPS);
+    if (steps > 0) await train(steps);
     hideProgress();
-    say(`done in ${seconds()} s: ${count.toLocaleString()} Gaussians from ${photos.length} photos through ${MODELS[result.variant].label}${TRAIN_STEPS > 0 ? "" : ", untrained"}. Drag to look around.`);
+    say(`done in ${seconds()} s: ${count.toLocaleString()} Gaussians from ${photos.length} photos through ${MODELS[result.variant].label}${steps > 0 ? "" : ", untrained"}. Drag to look around.`);
   } catch (error) {
     hideProgress();
     say(`error: ${error.message ?? error}`);
@@ -288,17 +330,54 @@ drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = (e) => { e.preventDefault(); photosToSplat([...e.dataTransfer.files]); };
 
-document.getElementById("load-files").onclick = async () => {
-  const [ply] = document.getElementById("ply").files, [cameras] = document.getElementById("cameras").files;
-  if (!ply || !cameras) { say("pick a splat.ply and a cameras.json"); return; }
-  const count = await loadScene(new Uint8Array(await ply.arrayBuffer()), await cameras.text());
-  say(`loaded ${count.toLocaleString()} Gaussians`);
+// A `fit` run picked as files: one .ply, one cameras.json and input_view{i}.png for every
+// camera.
+async function loadRunFiles(files) {
+  const plys = files.filter((file) => file.name.endsWith(".ply"));
+  const jsons = files.filter((file) => file.name.endsWith(".json"));
+  const photos = files.filter((file) => file.name.endsWith(".png"));
+  if (plys.length !== 1 || jsons.length !== 1 || plys.length + jsons.length + photos.length !== files.length) {
+    throw new Error(`pick one splat.ply, one cameras.json and the input_view photos, not ${files.map((file) => file.name).join(", ")}`);
+  }
+  const photoByIndex = new Map(photos.map((file) => {
+    const match = file.name.match(RUN_PHOTO);
+    if (!match) throw new Error(`${file.name} is not an input_view{i}.png`);
+    return [Number(match[1]), file];
+  }));
+  // Checked before the scene is replaced: a refused run leaves the current one as it is.
+  const camerasJson = await jsons[0].text();
+  const cameraCount = JSON.parse(camerasJson).length;
+  if (photoByIndex.size !== cameraCount || [...photoByIndex.keys()].some((i) => i >= cameraCount)) {
+    throw new Error(`${jsons[0].name} has ${cameraCount} cameras: pick input_view0.png to input_view${cameraCount - 1}.png with it`);
+  }
+  const count = await loadScene(new Uint8Array(await plys[0].arrayBuffer()), camerasJson);
+  for (const [i, name] of cameraNames.entries()) addPhoto(name, new Uint8Array(await photoByIndex.get(i).arrayBuffer()));
+  say(`loaded ${count.toLocaleString()} Gaussians and ${cameraNames.length} photos from ${plys[0].name}. Drag to look around.`);
+}
+runFiles.onchange = async () => {
+  const files = [...runFiles.files];
+  runFiles.value = "";
+  if (busy) return;
+  setBusy(true);
+  try { await loadRunFiles(files); }
+  catch (error) { say(`error: ${error.message ?? error}`); throw error; }
+  finally { setBusy(false); }
 };
 trainButton.onclick = async () => {
   if (busy) return;
   setBusy(true);
-  try { await train(Number(document.getElementById("steps").value)); hideProgress(); say("refined. Drag to look around."); }
-  finally { setBusy(false); }
+  try {
+    const steps = trainingSteps(), started = performance.now();
+    await train(steps);
+    hideProgress();
+    say(`trained ${steps} more steps in ${((performance.now() - started) / 1000).toFixed(0)} s. Drag to look around.`);
+  } catch (error) {
+    hideProgress();
+    say(`error: ${error.message ?? error}`);
+    throw error;
+  } finally {
+    setBusy(false);
+  }
 };
 downloadButton.onclick = () => {
   const link = document.createElement("a");

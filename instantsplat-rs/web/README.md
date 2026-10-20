@@ -12,8 +12,10 @@ first asks for one click to download the chosen model, 137 MB for Small, 542 MB 
 runs the whole chain, 300 training steps included; then drag to look around and download
 `splat.ply`. The view is rendered at the photos' height and at least 4:3 wide (a wider
 frame at the same focal length, so portrait photos still give a landscape view).
-"Advanced" has the camera choice, more training and loading a `fit` run.
-`?steps=N` changes the 300 training steps; `?steps=0` shows the network's Gaussians untrained.
+"Advanced" has the photo to view from, the training steps (300, run on every
+reconstruction; 0 shows the network's Gaussians untrained) with a "refine camera poses" box
+(on by default), "Train N more steps" on the current splat, and loading a `fit` run. The
+desktop app (`../app`) has the same section. `?steps=N` presets the steps.
 
 ![The page after reconstructing the six duck photos](demo.png)
 
@@ -37,8 +39,8 @@ Anything 3 Small 23.5 s on one thread with SIMD (0.75 s per within-view backbone
 26 steps/s (300 steps in 11.5 s). Natively the network takes 2 s on Metal.
 
 The page also loads a `fit` run (`splat.ply`, `cameras.json` and the `input_view{i}.png`
-it was trained on) from files (under "Advanced") or `?run=<directory URL>`; the example
-run is the default scene.
+it was trained on, all picked together under "Advanced") or `?run=<directory URL>`; the
+example run is the default scene.
 
 ## Build and serve
 

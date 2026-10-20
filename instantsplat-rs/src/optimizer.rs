@@ -39,6 +39,16 @@ pub const LEARNING_RATES_3DGS: LearningRates = LearningRates {
     camera_focal: 0.0,
 };
 
+/// `LEARNING_RATES_3DGS` with InstantSplat's 1e-3 camera pose rates, for the apps' 300-step
+/// runs. Measured on the six duck photos through Depth Anything 3 Base, 300 steps in the
+/// browser: final loss 0.0838 with fixed poses, 0.0828 at 1e-3 (cameras turned up to
+/// 0.19°), 0.0857 at 3e-3, 0.0918 at 1e-2 (up to 1.8°, visibly doubled edges).
+pub const LEARNING_RATES_SHORT_RUN: LearningRates = LearningRates {
+    camera_rotation: 1e-3,
+    camera_translation: 1e-3,
+    ..LEARNING_RATES_3DGS
+};
+
 /// The position rate at the last step over the first, as 3DGS (1.6e-4 to 1.6e-6) and
 /// InstantSplat over its 1000 steps, decayed exponentially in between. The camera pose
 /// rates decay by the same factor.

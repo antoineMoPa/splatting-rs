@@ -1,5 +1,5 @@
 //! The page's look, as the browser demo's `index.html`: its palette, the card, the
-//! dashed drop zone, the progress bar and the blue primary button.
+//! dashed drop zone, the progress bar, the blue primary button and the small white one.
 
 use egui::{
     Align, Button, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText,
@@ -47,6 +47,7 @@ pub const VIEW_SHADOW: Shadow = Shadow {
 };
 const BUTTON_PADDING: Vec2 = Vec2::new(18.0, 10.0);
 const BUTTON_RADIUS: u8 = 10;
+const SMALL_BUTTON_HEIGHT: f32 = 32.0;
 
 /// Light visuals in the page's colours and the page's type sizes.
 pub fn apply(ctx: &egui::Context) {
@@ -191,4 +192,15 @@ pub fn page_column<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
         result
     })
     .inner
+}
+
+/// The page's small white button with the line border ("Advanced"'s); faded while
+/// disabled. Whether it was clicked.
+pub fn small_button(ui: &mut Ui, text: &str, enabled: bool) -> bool {
+    let button = Button::new(RichText::new(text).size(SMALL_SIZE).color(INK))
+        .fill(CARD)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .min_size(Vec2::new(0.0, SMALL_BUTTON_HEIGHT));
+    ui.add_enabled(enabled, button).on_hover_cursor(CursorIcon::PointingHand).clicked()
 }

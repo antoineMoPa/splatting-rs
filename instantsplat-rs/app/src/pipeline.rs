@@ -1,11 +1,12 @@
 //! The photos → splat chain on one background thread that owns the GPU: the network on
-//! candle/Metal, one Gaussian per point, `TRAIN_STEPS` steps of the wgpu trainer with the
-//! preview rendered live from its parameters, then the trained cloud kept for `Save`. The
+//! candle/Metal, one Gaussian per point, `Training::steps` steps of the wgpu trainer with
+//! the preview rendered live from its parameters, then the trained cloud kept for `Save`
+//! and for more training (`Train`). A `fit` run loads as such a scene (`LoadRun`). The
 //! window talks to it through `Worker`: commands in, `Event`s out, and the orbit the
 //! preview is rendered from in a mutex, so that a drag never waits for the GPU. The same
 //! sequence as the browser demo (`../web/src/lib.rs`, `reconstruct.rs`). Nothing happens
-//! before the first `Reconstruct`: the thread sleeps on its channel, the GPU device and
-//! the weights are requested by that command.
+//! before the first `Reconstruct` or `LoadRun`: the thread sleeps on its channel, the GPU
+//! device (and the weights) are requested by that command.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -17,22 +18,30 @@ use anyhow::{Context, Result, ensure};
 use candle_core::DType;
 use hf_hub::api::Progress;
 use instantsplat_rs::camera::PinholeCamera;
+use instantsplat_rs::camera_pose::pose_distance;
+use instantsplat_rs::cameras_json::read_cameras_json;
+use instantsplat_rs::dense_view::DenseView;
 use instantsplat_rs::gaussians::GaussianCloud;
 use instantsplat_rs::gpu::Gpu;
 use instantsplat_rs::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
 use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
 use instantsplat_rs::network::{Network, NetworkSettings, dense_views_from_images};
-use instantsplat_rs::optimizer::{LEARNING_RATES_3DGS, position_rate_factor};
+use instantsplat_rs::optimizer::{LEARNING_RATES_SHORT_RUN, position_rate_factor};
 use instantsplat_rs::rasterizer::Rasterizer;
-use instantsplat_rs::splat_ply::write_splat_ply;
+use instantsplat_rs::splat_ply::{read_splat_ply, write_splat_ply};
 use instantsplat_rs::training::{CameraPoses, Trainer};
+use instantsplat_rs::training_frames::load_training_view;
 use instantsplat_rs::turntable::Turntable;
 
 use crate::weights::{ModelChoice, model_choice};
 
-/// Steps run on every reconstruction before the result is shown (the browser demo's
-/// `TRAIN_STEPS`).
-pub const TRAIN_STEPS: usize = 300;
+/// Steps run on every reconstruction before the result is shown, until "Advanced" changes
+/// them (the browser demo's `DEFAULT_TRAIN_STEPS`).
+pub const DEFAULT_TRAIN_STEPS: usize = 300;
+/// A `fit` run's files, as `fit` writes them: the splat, its cameras, and the photo of
+/// camera i (`cameras.json` order) as `input_view{i}.png`.
+const RUN_SPLAT: &str = "splat.ply";
+const RUN_CAMERAS: &str = "cameras.json";
 /// The preview is rendered from the trainer's live parameters every this many steps.
 const PREVIEW_EVERY: usize = 10;
 /// Photos the chain needs at least (the networks place cameras from two views up).
@@ -53,18 +62,20 @@ const PREVIEW_MIN_ASPECT_RATIO: f64 = 4.0 / 3.0;
 const NETWORK_DTYPE: DType = DType::F16;
 
 /// Progress bar shares: the model download is its own step; a reconstruction is the
-/// network, then training.
+/// network, then training; more training on a splat is its own step.
 #[derive(Clone, Copy)]
 pub enum Stage {
     Download,
     Reconstruct,
     Train,
+    TrainMore,
 }
 
-const STAGE_SHARES: [(Stage, f32, f32); 3] = [
+const STAGE_SHARES: [(Stage, f32, f32); 4] = [
     (Stage::Download, 0.0, 1.0),
     (Stage::Reconstruct, 0.0, 0.5),
     (Stage::Train, 0.5, 1.0),
+    (Stage::TrainMore, 0.0, 1.0),
 ];
 
 impl Stage {
@@ -75,17 +86,34 @@ impl Stage {
     }
 }
 
-/// Where the preview camera stands: the first photo's camera moved on the turntable
+/// Where the preview camera stands: the camera of photo `view` moved on the turntable
 /// (`instantsplat_rs::turntable`), in degrees.
 #[derive(Clone, Copy, Default)]
 pub struct Orbit {
+    pub view: usize,
     pub yaw_degrees: f64,
     pub pitch_degrees: f64,
 }
 
+/// How the splat is trained against the photos: the "Training" row of "Advanced".
+#[derive(Clone, Copy)]
+pub struct Training {
+    /// 0 keeps a reconstruction's Gaussians untrained.
+    pub steps: usize,
+    pub camera_poses: CameraPoses,
+}
+
 pub enum Command {
-    /// Runs the whole chain on these photo files with this network.
-    Reconstruct { photos: Vec<PathBuf>, network: Network },
+    /// Runs the whole chain on these photo files with this network, then `training`.
+    Reconstruct {
+        photos: Vec<PathBuf>,
+        network: Network,
+        training: Training,
+    },
+    /// Loads the `fit` run in this directory as the scene.
+    LoadRun(PathBuf),
+    /// Trains the scene's splat more against its photos.
+    Train(Training),
     /// Renders the preview again from the current `Orbit`.
     Render,
     /// Writes the trained splat as a 3DGS PLY.
@@ -104,7 +132,11 @@ pub enum Event {
     /// The bar's fill in [0, 1], or hidden.
     Progress(Option<f32>),
     Frame(PreviewFrame),
-    /// A reconstruction ended, with a splat to look at and save when `ok`.
+    /// A new scene (reconstructed or loaded): its photos' names, the orbit's views; the
+    /// orbit is back at view 0.
+    Photos(Vec<String>),
+    /// A reconstruction, a run load or training ended, with a splat to look at, save and
+    /// train when `ok`.
     Finished { ok: bool },
 }
 
@@ -138,18 +170,30 @@ impl Worker {
         Self { commands, events, orbit }
     }
 
-    pub fn reconstruct(&self, photos: Vec<PathBuf>, network: Network) {
-        self.commands.send(Command::Reconstruct { photos, network }).expect("the pipeline thread is gone");
+    pub fn reconstruct(&self, photos: Vec<PathBuf>, network: Network, training: Training) {
+        self.send(Command::Reconstruct { photos, network, training });
+    }
+
+    pub fn load_run(&self, dir: PathBuf) {
+        self.send(Command::LoadRun(dir));
+    }
+
+    pub fn train(&self, training: Training) {
+        self.send(Command::Train(training));
     }
 
     /// Moves the preview camera; the next frame is rendered from here.
     pub fn look(&self, orbit: Orbit) {
         *self.orbit.lock().expect("orbit lock") = orbit;
-        self.commands.send(Command::Render).expect("the pipeline thread is gone");
+        self.send(Command::Render);
     }
 
     pub fn save(&self, path: PathBuf) {
-        self.commands.send(Command::Save(path)).expect("the pipeline thread is gone");
+        self.send(Command::Save(path));
+    }
+
+    fn send(&self, command: Command) {
+        self.commands.send(command).expect("the pipeline thread is gone");
     }
 
     /// The next event, if one is waiting. Panics when the thread has stopped (a panic
@@ -191,20 +235,45 @@ impl Events {
     }
 }
 
-/// A splat to look at: the first camera to orbit, the turntable it moves on, and a
-/// rasterizer over the parameters (the trainer's while training, the trained cloud's
-/// after).
+/// A splat to look at and to train: the photos as training views (their cameras the
+/// refined ones once trained with `CameraPoses::Refined`), and a rasterizer over the
+/// cloud.
 struct Scene {
-    camera: PinholeCamera,
-    turntable: Turntable,
+    /// One per view: the file names of the photos, or a run's `cameras.json` names.
+    names: Vec<String>,
+    views: Vec<DenseView>,
+    cloud: GaussianCloud,
     /// Kept alongside the rasterizer that binds it.
     _params: wgpu::Buffer,
     rasterizer: Rasterizer,
-    cloud: GaussianCloud,
+}
+
+impl Scene {
+    fn new(gpu: &Gpu, names: Vec<String>, views: Vec<DenseView>, cloud: GaussianCloud) -> Scene {
+        assert_eq!(names.len(), views.len(), "one name per view");
+        let params = gpu.storage_buffer_from("splat params", &cloud.to_packed());
+        let rasterizer = preview_rasterizer(gpu, &params, cloud.len(), preview_size(&views[0].camera));
+        Scene {
+            names,
+            views,
+            cloud,
+            _params: params,
+            rasterizer,
+        }
+    }
+
+    fn cameras(&self) -> Vec<PinholeCamera> {
+        self.views.iter().map(|view| view.camera.clone()).collect()
+    }
+
+    /// The turntable the views' cameras orbit on.
+    fn turntable(&self) -> Turntable {
+        Turntable::from_cameras(&self.cameras(), self.cloud.centroid())
+    }
 }
 
 struct PipelineThread {
-    /// Requested by the first reconstruction.
+    /// Requested by the first reconstruction or run load.
     gpu: Option<Gpu>,
     commands: Receiver<Command>,
     events: Events,
@@ -300,11 +369,34 @@ fn check_photo(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The file name of `path`, for the status line.
+fn file_name(path: &Path) -> String {
+    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
 impl PipelineThread {
     fn run(&mut self) {
         while let Ok(command) = self.commands.recv() {
             match command {
-                Command::Reconstruct { photos, network } => self.reconstruct(photos, network),
+                Command::Reconstruct { photos, network, training } => {
+                    let result = self.reconstruct(&photos, network, training);
+                    self.finish(result);
+                }
+                Command::LoadRun(dir) => {
+                    let result = self.load_run(&dir);
+                    self.finish(result);
+                }
+                Command::Train(training) => {
+                    let started = Instant::now();
+                    self.train(training, Stage::TrainMore);
+                    self.events.hide_progress();
+                    self.events.status(format!(
+                        "trained {} more steps in {} s. Drag to look around.",
+                        training.steps,
+                        started.elapsed().as_secs_f64().round() as u64
+                    ));
+                    self.finish(Ok(()));
+                }
                 Command::Render => {
                     self.drain_renders();
                     self.render();
@@ -312,6 +404,15 @@ impl PipelineThread {
                 Command::Save(path) => self.save(&path),
             }
         }
+    }
+
+    /// Tells the window a command is over, after its error when it failed.
+    fn finish(&self, result: Result<()>) {
+        if let Err(error) = &result {
+            self.events.hide_progress();
+            self.events.status(format!("error: {error:#}"));
+        }
+        self.events.send(Event::Finished { ok: result.is_ok() });
     }
 
     /// Takes every `Render` waiting (one render shows the latest orbit for all of them).
@@ -326,17 +427,28 @@ impl PipelineThread {
         *self.orbit.lock().expect("orbit lock")
     }
 
-    /// The GPU device, once a reconstruction has requested it.
-    fn gpu(&self) -> &Gpu {
-        self.gpu.as_ref().expect("the GPU is requested by the first reconstruction")
+    /// The GPU device, requested on first use.
+    fn gpu(&mut self) -> &Gpu {
+        self.gpu.get_or_insert_with(Gpu::request)
     }
 
+    /// The scene from `orbit`.
     fn render(&self) {
         let Some(scene) = &self.scene else {
             return;
         };
-        let frame = render_preview(self.gpu(), &scene.rasterizer, &scene.camera, &scene.turntable, self.orbit());
+        let gpu = self.gpu.as_ref().expect("a scene has a GPU");
+        let orbit = self.orbit();
+        let frame = render_preview(gpu, &scene.rasterizer, &scene.views[orbit.view].camera, &scene.turntable(), orbit);
         self.events.send(Event::Frame(frame));
+    }
+
+    /// Makes `scene` the one to look at, from its first photo.
+    fn show(&mut self, scene: Scene) {
+        *self.orbit.lock().expect("orbit lock") = Orbit::default();
+        self.events.send(Event::Photos(scene.names.clone()));
+        self.scene = Some(scene);
+        self.render();
     }
 
     fn save(&self, path: &Path) {
@@ -344,7 +456,7 @@ impl PipelineThread {
         match write_splat_ply(path, &scene.cloud) {
             Ok(()) => self.events.status(format!(
                 "saved {} ({} Gaussians, {:.1} MB). Drag to look around.",
-                path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string()),
+                file_name(path),
                 scene.cloud.len(),
                 std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) as f64 / 1e6
             )),
@@ -352,31 +464,14 @@ impl PipelineThread {
         }
     }
 
-    fn reconstruct(&mut self, photos: Vec<PathBuf>, network: Network) {
-        let ok = match self.run_chain(&photos, network) {
-            Ok(()) => true,
-            Err(error) => {
-                self.events.hide_progress();
-                self.events.status(format!("error: {error:#}"));
-                false
-            }
-        };
-        self.events.send(Event::Finished { ok });
-    }
-
-    /// Network → Gaussians → `TRAIN_STEPS` steps, previews along the way; the trained
-    /// splat becomes the scene.
-    fn run_chain(&mut self, photos: &[PathBuf], network: Network) -> Result<()> {
+    /// Network → Gaussians → `training`, previews along the way; the trained splat becomes
+    /// the scene.
+    fn reconstruct(&mut self, photos: &[PathBuf], network: Network, training: Training) -> Result<()> {
         ensure!(photos.len() >= MIN_PHOTOS, "{} photos: pick at least {MIN_PHOTOS}", photos.len());
         for photo in photos {
             check_photo(photo)?;
         }
-        *self.orbit.lock().expect("orbit lock") = Orbit::default();
         let weights = fetch_weights(&model_choice(network), &self.events)?;
-        if self.gpu.is_none() {
-            self.gpu = Some(Gpu::request());
-        }
-        let gpu = self.gpu();
 
         let started = Instant::now();
         let seconds = || started.elapsed().as_secs_f64().round() as u64;
@@ -403,50 +498,99 @@ impl PipelineThread {
         ));
 
         let cloud = gaussians_from_dense_views(&views, INIT);
-        let camera = views[0].camera.clone();
-        let cameras: Vec<PinholeCamera> = views.iter().map(|view| view.camera.clone()).collect();
-        let turntable = Turntable::from_cameras(&cameras, cloud.centroid());
-        let preview = preview_size(&camera);
-        let mut trainer = Trainer::new(gpu, &cloud, &views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
-        let live = preview_rasterizer(gpu, trainer.params(), trainer.gaussian_count(), preview);
-        self.events.send(Event::Frame(render_preview(gpu, &live, &camera, &turntable, self.orbit())));
-        self.events.progress(Stage::Train, 0.0);
+        let names = photos.iter().map(|photo| file_name(photo)).collect();
+        let scene = Scene::new(self.gpu(), names, views, cloud);
+        self.show(scene);
+        if training.steps > 0 {
+            self.train(training, Stage::Train);
+        }
+        self.events.hide_progress();
+        self.events.status(format!(
+            "done in {} s: {} Gaussians from {} photos with {}{}. Drag to look around.",
+            seconds(),
+            self.scene.as_ref().expect("scene just set").cloud.len(),
+            photos.len(),
+            network.label(),
+            if training.steps > 0 { "" } else { ", untrained" }
+        ));
+        Ok(())
+    }
+
+    /// The `fit` run in `dir` (`RUN_SPLAT`, `RUN_CAMERAS` and every camera's
+    /// `input_view{i}.png`) as the scene.
+    fn load_run(&mut self, dir: &Path) -> Result<()> {
+        self.events.status(format!("loading {}…", dir.display()));
+        let cloud = read_splat_ply(&dir.join(RUN_SPLAT))?;
+        let cameras = read_cameras_json(&dir.join(RUN_CAMERAS))?;
+        ensure!(cameras.len() >= MIN_PHOTOS, "{}: {} cameras, training needs at least {MIN_PHOTOS}", RUN_CAMERAS, cameras.len());
+        let views = cameras
+            .iter()
+            .enumerate()
+            .map(|(index, (_, camera))| load_training_view(&dir.join(format!("input_view{index}.png")), camera, (camera.width, camera.height)))
+            .collect::<Result<Vec<_>>>()?;
+        let names = cameras.into_iter().map(|(name, _)| name).collect();
+        let scene = Scene::new(self.gpu(), names, views, cloud);
+        self.show(scene);
+        let scene = self.scene.as_ref().expect("scene just set");
+        self.events.status(format!(
+            "loaded {} Gaussians and {} photos from {}. Drag to look around.",
+            scene.cloud.len(),
+            scene.views.len(),
+            file_name(dir)
+        ));
+        Ok(())
+    }
+
+    /// `training` on the scene, previews along the way, the bar filling `stage`'s share;
+    /// the trained cloud and refined cameras replace the scene's.
+    fn train(&mut self, training: Training, stage: Stage) {
+        let Training { steps, camera_poses } = training;
+        assert!(steps > 0, "training 0 steps");
+        let scene = self.scene.take().expect("training without a scene");
+        let gpu = self.gpu.as_ref().expect("a scene has a GPU");
+        let started = Instant::now();
+        let turntable = scene.turntable();
+        let mut trainer = Trainer::new(gpu, &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses);
+        let live = preview_rasterizer(gpu, trainer.params(), trainer.gaussian_count(), preview_size(&scene.views[0].camera));
+        let render_live = |orbit: Orbit| render_preview(gpu, &live, &scene.views[orbit.view].camera, &turntable, orbit);
+        self.events.send(Event::Frame(render_live(self.orbit())));
+        self.events.progress(stage, 0.0);
 
         let view_count = trainer.view_count();
-        for step in 0..TRAIN_STEPS {
+        for step in 0..steps {
             let view = step % view_count;
-            trainer.step(view, position_rate_factor(step, TRAIN_STEPS));
+            trainer.step(view, position_rate_factor(step, steps));
             let done = step + 1;
-            if done % PREVIEW_EVERY == 0 || done == TRAIN_STEPS {
+            if done % PREVIEW_EVERY == 0 || done == steps {
                 pollster::block_on(trainer.log_step_async(step, view));
                 self.drain_renders();
-                self.events.send(Event::Frame(render_preview(gpu, &live, &camera, &turntable, self.orbit())));
-                self.events.progress(Stage::Train, done as f32 / TRAIN_STEPS as f32);
-                self.events.status(format!("refining: step {done} of {TRAIN_STEPS} ({} s)", seconds()));
+                self.events.send(Event::Frame(render_live(self.orbit())));
+                self.events.progress(stage, done as f32 / steps as f32);
+                self.events.status(format!(
+                    "refining: step {done} of {steps} ({} s)",
+                    started.elapsed().as_secs_f64().round() as u64
+                ));
             }
         }
         drop(live);
         let report = pollster::block_on(trainer.finish_async());
-        println!("trained: {TRAIN_STEPS} steps in {:.1?}: {}; {}", report.elapsed, report.final_loss, report.prune);
-
-        let params = gpu.storage_buffer_from("splat params", &report.cloud.to_packed());
-        let rasterizer = preview_rasterizer(gpu, &params, report.cloud.len(), preview);
-        self.scene = Some(Scene {
-            camera,
-            turntable,
-            _params: params,
-            rasterizer,
-            cloud: report.cloud,
-        });
+        let largest_turn = scene
+            .views
+            .iter()
+            .zip(&report.cameras)
+            .map(|(view, refined)| pose_distance(refined, &view.camera).0)
+            .fold(0.0, f64::max);
+        println!(
+            "trained: {steps} steps in {:.1?}: {}; {}; cameras turned up to {largest_turn:.2}°",
+            report.elapsed, report.final_loss, report.prune
+        );
+        // The refined cameras replace the views' (view 0 is the fixed one), so that more
+        // training starts from them.
+        let Scene { names, mut views, .. } = scene;
+        for (view, refined) in views.iter_mut().zip(report.cameras) {
+            view.camera = refined;
+        }
+        self.scene = Some(Scene::new(gpu, names, views, report.cloud));
         self.render();
-        self.events.hide_progress();
-        self.events.status(format!(
-            "done in {} s: {} Gaussians from {} photos with {}. Drag to look around.",
-            seconds(),
-            self.scene.as_ref().expect("scene just set").cloud.len(),
-            photos.len(),
-            network.label()
-        ));
-        Ok(())
     }
 }
