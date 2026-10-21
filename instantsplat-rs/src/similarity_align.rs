@@ -194,7 +194,11 @@ mod tests {
         let (found, residuals) = align_cameras(&pairs);
         assert!((found.scale - truth.scale).abs() < 1e-9, "scale {}", found.scale);
         assert!((found.rotation - truth.rotation).norm() < 1e-9, "rotation {}", found.rotation);
-        assert!((found.translation - truth.translation).norm() < 1e-9, "translation {}", found.translation);
+        assert!(
+            (found.translation - truth.translation).norm() < 1e-9,
+            "translation {}",
+            found.translation
+        );
         for residual in &residuals {
             assert!(residual.center_error < 1e-9, "{residual:?}");
             assert!(residual.direction_error_degrees < 1e-7, "{residual:?}");
@@ -209,15 +213,9 @@ mod tests {
             translation: Vector3::new(2.0, 0.0, -3.0),
         };
         let looking = Rotation3::from_euler_angles(0.2, 0.1, 0.0).into_inner();
-        let from: Vec<PinholeCamera> = (0..3)
-            .map(|i| camera(looking, Vector3::new(i as f64, 0.0, 0.0)))
-            .collect();
+        let from: Vec<PinholeCamera> = (0..3).map(|i| camera(looking, Vector3::new(i as f64, 0.0, 0.0))).collect();
         let to: Vec<PinholeCamera> = from.iter().map(|c| truth.apply_camera(c)).collect();
-        let pairs: Vec<CameraPair> = from
-            .iter()
-            .zip(&to)
-            .map(|(from, to)| CameraPair { name: "x", from, to })
-            .collect();
+        let pairs: Vec<CameraPair> = from.iter().zip(&to).map(|(from, to)| CameraPair { name: "x", from, to }).collect();
         let (found, residuals) = align_cameras(&pairs);
         assert!((found.rotation - truth.rotation).norm() < 1e-9, "rotation {}", found.rotation);
         assert!((found.scale - truth.scale).abs() < 1e-9);
@@ -250,10 +248,7 @@ mod tests {
     #[should_panic(expected = "need at least 3")]
     fn refuses_two_pairs() {
         let cameras = orbit(2);
-        let pairs: Vec<CameraPair> = cameras
-            .iter()
-            .map(|c| CameraPair { name: "x", from: c, to: c })
-            .collect();
+        let pairs: Vec<CameraPair> = cameras.iter().map(|c| CameraPair { name: "x", from: c, to: c }).collect();
         align_cameras(&pairs);
     }
 }

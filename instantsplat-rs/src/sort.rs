@@ -58,12 +58,7 @@ impl RadixSort {
             })
             .collect();
         let histogram_groups = (0..PASSES)
-            .map(|pass| {
-                gpu.bind_group(
-                    &histogram,
-                    &[keys[pass % 2], meta, &histograms, &pass_uniforms[pass]],
-                )
-            })
+            .map(|pass| gpu.bind_group(&histogram, &[keys[pass % 2], meta, &histograms, &pass_uniforms[pass]]))
             .collect();
         let scatter_groups = (0..PASSES)
             .map(|pass| {
@@ -96,21 +91,9 @@ impl RadixSort {
     /// `indirect` holds the sort block count as its first dispatch triple.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder, indirect: &wgpu::Buffer) {
         for pass in 0..PASSES {
-            dispatch_indirect(
-                encoder,
-                &self.histogram,
-                &self.histogram_groups[pass],
-                indirect,
-                0,
-            );
+            dispatch_indirect(encoder, &self.histogram, &self.histogram_groups[pass], indirect, 0);
             dispatch(encoder, &self.scan, &self.scan_group, 1);
-            dispatch_indirect(
-                encoder,
-                &self.scatter,
-                &self.scatter_groups[pass],
-                indirect,
-                0,
-            );
+            dispatch_indirect(encoder, &self.scatter, &self.scatter_groups[pass], indirect, 0);
         }
     }
 }

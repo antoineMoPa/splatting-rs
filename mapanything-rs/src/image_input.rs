@@ -97,8 +97,7 @@ impl Cutout {
         let center = [width / 2.0, height / 2.0];
         Intrinsics {
             focal: [focal * mapping.scale[0], focal * mapping.scale[1]],
-            principal_point: [0, 1]
-                .map(|axis| center[axis] * mapping.scale[axis] - mapping.offset[axis] - 0.5),
+            principal_point: [0, 1].map(|axis| center[axis] * mapping.scale[axis] - mapping.offset[axis] - 0.5),
         }
     }
 }
@@ -115,10 +114,7 @@ const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 fn read_upright(file: impl BufRead + Seek) -> Result<DynamicImage> {
-    let mut decoder = ImageReader::new(file)
-        .with_guessed_format()?
-        .into_decoder()
-        .context("decoding")?;
+    let mut decoder = ImageReader::new(file).with_guessed_format()?.into_decoder().context("decoding")?;
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
@@ -150,11 +146,7 @@ fn crop_to_foreground(rgba: RgbaImage) -> Result<(RgbaImage, [i64; 2])> {
     };
     let left = ((min_x + max_x + 1) as f64 - crop_w) / 2.0;
     let top = ((min_y + max_y + 1) as f64 - crop_h) / 2.0;
-    let mut cropped = RgbaImage::from_pixel(
-        crop_w.round() as u32,
-        crop_h.round() as u32,
-        Rgba([0, 0, 0, 0]),
-    );
+    let mut cropped = RgbaImage::from_pixel(crop_w.round() as u32, crop_h.round() as u32, Rgba([0, 0, 0, 0]));
     let corner = [left.round() as i64, top.round() as i64];
     image::imageops::replace(&mut cropped, &rgba, -corner[0], -corner[1]);
     Ok((cropped, corner))
@@ -190,8 +182,7 @@ fn cutout_from_file(mut file: impl BufRead + Seek, label: &str) -> Result<Cutout
     file.seek(SeekFrom::Start(0))?;
     let upright = read_upright(file).with_context(|| format!("reading image {label}"))?;
     let original_size = (upright.width(), upright.height());
-    let (foreground_crop, corner) =
-        crop_to_foreground(upright.to_rgba8()).with_context(|| format!("cropping {label}"))?;
+    let (foreground_crop, corner) = crop_to_foreground(upright.to_rgba8()).with_context(|| format!("cropping {label}"))?;
     Ok(Cutout {
         image: composite_on_backdrop(foreground_crop),
         original_size,
@@ -201,22 +192,9 @@ fn cutout_from_file(mut file: impl BufRead + Seek, label: &str) -> Result<Cutout
 }
 
 /// The final, already resized and cropped image as model input.
-pub fn to_model_input(
-    rgba: RgbaImage,
-    intrinsics: Option<Intrinsics>,
-    path: &Path,
-    dtype: DType,
-    device: &Device,
-) -> Result<InputImage> {
-    let foreground: Vec<bool> = rgba
-        .pixels()
-        .map(|pixel| pixel[3] >= FOREGROUND_MIN_ALPHA)
-        .collect();
-    ensure!(
-        foreground.contains(&true),
-        "{} is fully transparent after cropping",
-        path.display()
-    );
+pub fn to_model_input(rgba: RgbaImage, intrinsics: Option<Intrinsics>, path: &Path, dtype: DType, device: &Device) -> Result<InputImage> {
+    let foreground: Vec<bool> = rgba.pixels().map(|pixel| pixel[3] >= FOREGROUND_MIN_ALPHA).collect();
+    ensure!(foreground.contains(&true), "{} is fully transparent after cropping", path.display());
     let rgb = DynamicImage::ImageRgba8(rgba).to_rgb8();
     let (width, height) = (rgb.width() as usize, rgb.height() as usize);
     let mean = Tensor::new(&IMAGENET_MEAN, device)?.reshape((3, 1, 1))?;

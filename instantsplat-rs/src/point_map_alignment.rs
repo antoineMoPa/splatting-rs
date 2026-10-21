@@ -9,7 +9,9 @@
 //! with them, so its points still project onto the same pixels of its photo. Two passes:
 //! first each view onto the views before it (so that a group of views that agree with
 //! each other but not with view 0 cannot hold itself in place), then each view onto all
-//! the others.
+//! the others. A pass that finds no surface shared with the others (fewer than
+//! `MIN_MATCHES` matches: photos of an object's front and back, or point maps the network
+//! put far apart) leaves the view where it was, the network's pose if both passes do.
 //!
 //! The transform is point-to-plane ICP: a sample of each view's confident points, each
 //! matched to the nearest sampled point of the other views (a voxel grid, within a radius
@@ -54,6 +56,25 @@ const TRANSLATION_PRIOR_WEIGHT: f64 = 0.01;
 /// others.
 const MIN_MATCHES: usize = 100;
 
+/// An ICP iteration that found fewer than `MIN_MATCHES` matches.
+#[derive(Clone, Debug)]
+pub struct NoSharedSurface {
+    pub matches: usize,
+    pub points: usize,
+    /// The match radius, in scene units.
+    pub radius: f64,
+}
+
+impl fmt::Display for NoSharedSurface {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} of {} points within {:.4} of the target: the point sets share no surface",
+            self.matches, self.points, self.radius
+        )
+    }
+}
+
 /// A sampled point and its surface normal (unit, either orientation).
 #[derive(Clone, Copy, Debug)]
 struct Surfel {
@@ -80,25 +101,36 @@ pub struct ViewAlignment {
     pub camera_moved: f64,
     /// Median distance from the view's sampled points to the nearest sampled point of the
     /// other (aligned) views, as a fraction of the scene depth, before and after the
-    /// view's own transform; points with no neighbor within `FIRST_RADIUS` are left out.
-    pub median_distance_before: f64,
-    pub median_distance_after: f64,
+    /// view's own transform; points with no neighbor within `FIRST_RADIUS` are left out,
+    /// None when no point has one.
+    pub median_distance_before: Option<f64>,
+    pub median_distance_after: Option<f64>,
     /// Points of the view counted in `median_distance_after`.
     pub matches: usize,
+    /// The passes (of two) that left the view where it was, finding no shared surface.
+    pub passes_without_shared_surface: Vec<NoSharedSurface>,
+}
+
+fn percent_or_none(fraction: Option<f64>) -> String {
+    fraction.map_or("none".to_string(), |fraction| format!("{:.2}%", 100.0 * fraction))
 }
 
 impl fmt::Display for ViewAlignment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "view {}: rotated {:.2}°, camera moved {:.2}% of the scene depth, median match distance {:.2}% -> {:.2}% ({} matches)",
+            "view {}: rotated {:.2}°, camera moved {:.2}% of the scene depth, median match distance {} -> {} ({} matches)",
             self.view,
             self.transform.rotation_degrees(),
             100.0 * self.camera_moved,
-            100.0 * self.median_distance_before,
-            100.0 * self.median_distance_after,
+            percent_or_none(self.median_distance_before),
+            percent_or_none(self.median_distance_after),
             self.matches
-        )
+        )?;
+        for skipped in &self.passes_without_shared_surface {
+            write!(f, "; a pass left it where it was: {skipped}")?;
+        }
+        Ok(())
     }
 }
 
@@ -182,14 +214,20 @@ fn point_to_plane_step(matches: &[(Vector3<f64>, &Surfel)], center: &Vector3<f64
     }
     // The prior, per block (rotation, translation), relative to that block's mean curvature.
     let (rotation_so_far, move_so_far) = so_far;
-    for (block, so_far, prior_weight) in [(0, rotation_so_far, ROTATION_PRIOR_WEIGHT), (3, move_so_far, TRANSLATION_PRIOR_WEIGHT)] {
+    for (block, so_far, prior_weight) in [
+        (0, rotation_so_far, ROTATION_PRIOR_WEIGHT),
+        (3, move_so_far, TRANSLATION_PRIOR_WEIGHT),
+    ] {
         let weight = prior_weight * (0..3).map(|i| normal_matrix[(block + i, block + i)]).sum::<f64>() / 3.0;
         for i in 0..3 {
             normal_matrix[(block + i, block + i)] += weight;
             right_side[block + i] -= weight * so_far[i];
         }
     }
-    let solution = normal_matrix.cholesky().expect("positive definite with the prior").solve(&right_side);
+    let solution = normal_matrix
+        .cholesky()
+        .expect("positive definite with the prior")
+        .solve(&right_side);
     let rotation = Rotation3::new(Vector3::new(solution[0], solution[1], solution[2])).into_inner();
     Similarity {
         scale: 1.0,
@@ -200,9 +238,9 @@ fn point_to_plane_step(matches: &[(Vector3<f64>, &Surfel)], center: &Vector3<f64
 
 /// The rigid transform taking the points of `from` onto the surface of `to`, starting
 /// from `start`: point-to-plane ICP with the match radius shrinking from `FIRST_RADIUS`
-/// to `LAST_RADIUS` times `extent`, pulled toward no motion (the prior weights). Panics
+/// to `LAST_RADIUS` times `extent`, pulled toward no motion (the prior weights). Fails
 /// when an iteration finds fewer than `MIN_MATCHES` matches.
-fn point_to_plane_icp(from: &[Surfel], to: &[Surfel], start: &Similarity, extent: f64) -> Similarity {
+fn point_to_plane_icp(from: &[Surfel], to: &[Surfel], start: &Similarity, extent: f64) -> Result<Similarity, NoSharedSurface> {
     assert!(extent > 0.0, "extent {extent}");
     let centroid = from.iter().map(|surfel| surfel.point).sum::<Vector3<f64>>() / from.len() as f64;
     let mut transform = start.clone();
@@ -217,18 +255,19 @@ fn point_to_plane_icp(from: &[Surfel], to: &[Surfel], start: &Similarity, extent
                     grid.nearest(&point).map(|(target, _)| (point, target))
                 })
                 .collect();
-            assert!(
-                matches.len() >= MIN_MATCHES,
-                "{} of {} points within {radius:.4} of the target: the point sets share no surface",
-                matches.len(),
-                from.len()
-            );
+            if matches.len() < MIN_MATCHES {
+                return Err(NoSharedSurface {
+                    matches: matches.len(),
+                    points: from.len(),
+                    radius,
+                });
+            }
             let center = matches.iter().map(|(point, _)| point).sum::<Vector3<f64>>() / matches.len() as f64;
             let step = point_to_plane_step(&matches, &center, motion_so_far(&transform, &centroid));
             transform = step.after(&transform);
         }
     }
-    transform
+    Ok(transform)
 }
 
 /// Distances from `from` (moved by `transform`) to their nearest neighbor in `grid`, for
@@ -284,7 +323,10 @@ impl DenseView {
                     continue;
                 }
                 if let Some(normal) = self.normal(x, y) {
-                    surfels.push(Surfel { point: self.point(x, y), normal });
+                    surfels.push(Surfel {
+                        point: self.point(x, y),
+                        normal,
+                    });
                 }
             }
         }
@@ -310,28 +352,33 @@ fn moved_surfels(surfels: &[Vec<Surfel>], transforms: &[Similarity], views: impl
 /// The rigid transform that takes the points of the views `from` (together) onto the
 /// surface of the views `to`, the match radii relative to `extent` (scene units). For
 /// measuring how far apart two groups of views put a surface.
-pub fn rigid_transform_between_groups(from: &[&DenseView], to: &[&DenseView], extent: f64) -> Similarity {
+pub fn rigid_transform_between_groups(from: &[&DenseView], to: &[&DenseView], extent: f64) -> Result<Similarity, NoSharedSurface> {
     let from: Vec<Surfel> = from.iter().flat_map(|view| view.surfels()).collect();
     let to: Vec<Surfel> = to.iter().flat_map(|view| view.surfels()).collect();
     point_to_plane_icp(&from, &to, &Similarity::identity(), extent)
 }
 
 /// Moves every view but view 0 (points and camera) onto the others; what was done, per
-/// view. Panics with fewer than two views or when a view shares no surface with the
-/// others.
+/// view. A pass that finds no surface shared with the others leaves the view where it
+/// was. Panics with fewer than two views.
 pub fn align_point_maps(views: &mut [DenseView]) -> Vec<ViewAlignment> {
     assert!(views.len() >= 2, "{} views to align, need at least 2", views.len());
     let surfels: Vec<Vec<Surfel>> = views.iter().map(DenseView::surfels).collect();
     let depth = scene_depth(&views[0], &surfels[0]);
     let mut transforms = vec![Similarity::identity(); views.len()];
-    for view in 1..views.len() {
-        let target = moved_surfels(&surfels, &transforms, 0..view);
-        transforms[view] = point_to_plane_icp(&surfels[view], &target, &transforms[view], depth);
-    }
+    let mut passes_without_shared_surface: Vec<Vec<NoSharedSurface>> = vec![Vec::new(); views.len()];
     let others = |view: usize| (0..views.len()).filter(move |&other| other != view);
-    for view in 1..views.len() {
-        let target = moved_surfels(&surfels, &transforms, others(view));
-        transforms[view] = point_to_plane_icp(&surfels[view], &target, &transforms[view], depth);
+    for pass in 0..2 {
+        for view in 1..views.len() {
+            let target = match pass {
+                0 => moved_surfels(&surfels, &transforms, 0..view),
+                _ => moved_surfels(&surfels, &transforms, others(view)),
+            };
+            match point_to_plane_icp(&surfels[view], &target, &transforms[view], depth) {
+                Ok(transform) => transforms[view] = transform,
+                Err(no_shared_surface) => passes_without_shared_surface[view].push(no_shared_surface),
+            }
+        }
     }
 
     let alignments = (1..views.len())
@@ -341,13 +388,15 @@ pub fn align_point_maps(views: &mut [DenseView]) -> Vec<ViewAlignment> {
             let before = match_distances(&surfels[view], &Similarity::identity(), &grid);
             let after = match_distances(&surfels[view], &transforms[view], &grid);
             let center = views[view].camera.translation;
+            let median_of_depth = |distances: Vec<f64>| (!distances.is_empty()).then(|| median(distances) / depth);
             ViewAlignment {
                 view,
                 transform: transforms[view].clone(),
                 camera_moved: (transforms[view].apply_point(&center) - center).norm() / depth,
-                median_distance_before: median(before) / depth,
+                median_distance_before: median_of_depth(before),
                 matches: after.len(),
-                median_distance_after: median(after) / depth,
+                median_distance_after: median_of_depth(after),
+                passes_without_shared_surface: std::mem::take(&mut passes_without_shared_surface[view]),
             }
         })
         .collect();
@@ -427,20 +476,28 @@ mod tests {
             rotation: Rotation3::from_euler_angles(0.002, -0.001, 0.002).into_inner(),
             translation: Vector3::new(0.06, -0.04, 0.03),
         };
-        let mut views = vec![surface_view(120, 0.0), moved(surface_view(120, 0.5), &perturbation), surface_view(120, 0.25)];
+        let mut views = vec![
+            surface_view(120, 0.0),
+            moved(surface_view(120, 0.5), &perturbation),
+            surface_view(120, 0.25),
+        ];
         let view_0_points = views[0].points.clone();
         let alignments = align_point_maps(&mut views);
 
         assert_eq!(views[0].points, view_0_points, "view 0 defines the frame");
         let perturbed = &alignments[0];
-        assert!(perturbed.median_distance_before > 0.01, "{perturbed}");
+        assert!(perturbed.median_distance_before.expect("matches before") > 0.01, "{perturbed}");
         // The samples of two views are different points: half a grid step (0.6% of the
         // depth) apart at best.
-        assert!(perturbed.median_distance_after < 0.006, "{perturbed}");
+        assert!(perturbed.median_distance_after.expect("matches after") < 0.006, "{perturbed}");
+        assert!(perturbed.passes_without_shared_surface.is_empty(), "{perturbed}");
         // Undone: the camera is back where it was, with its points.
         let camera = &views[1].camera;
         let rotation_error = Rotation3::from_matrix(&camera.rotation).angle().to_degrees();
-        assert!(rotation_error < 0.2, "camera rotated {rotation_error}° after alignment ({perturbed})");
+        assert!(
+            rotation_error < 0.2,
+            "camera rotated {rotation_error}° after alignment ({perturbed})"
+        );
         // 0.078 off before; what is left goes with the turn left.
         assert!(camera.translation.norm() < 0.01, "camera at {} after alignment", camera.translation);
         // The unperturbed view stays where it was.
@@ -470,13 +527,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "share no surface")]
-    fn refuses_views_far_apart() {
+    fn leaves_views_far_apart_where_they_are() {
         let far = Similarity {
             translation: Vector3::new(5.0, 0.0, 0.0),
             ..Similarity::identity()
         };
         let mut views = vec![surface_view(40, 0.0), moved(surface_view(40, 0.0), &far)];
-        align_point_maps(&mut views);
+        let far_points = views[1].points.clone();
+        let alignments = align_point_maps(&mut views);
+
+        assert_eq!(views[1].points, far_points);
+        let far_view = &alignments[0];
+        assert_eq!(far_view.passes_without_shared_surface.len(), 2, "{far_view}");
+        assert_eq!(
+            (far_view.median_distance_before, far_view.median_distance_after, far_view.matches),
+            (None, None, 0)
+        );
     }
 }

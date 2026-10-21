@@ -23,13 +23,7 @@ fn sincos(coordinate: f64, dim: usize, out: &mut [f32]) {
 /// [1, channels, rows, columns] embedding of a `columns` x `rows` map of an image with the
 /// given aspect ratio (width / height): the first half of the channels embeds the
 /// horizontal position, the second half the vertical one.
-pub fn uv_embedding(
-    channels: usize,
-    (rows, columns): (usize, usize),
-    aspect_ratio: f64,
-    device: &Device,
-    dtype: DType,
-) -> Result<Tensor> {
+pub fn uv_embedding(channels: usize, (rows, columns): (usize, usize), aspect_ratio: f64, device: &Device, dtype: DType) -> Result<Tensor> {
     assert!(channels % 4 == 0, "{channels} channels do not split into 2 axes of sin and cos");
     let diagonal = (aspect_ratio * aspect_ratio + 1.0).sqrt();
     let span = [aspect_ratio / diagonal, 1.0 / diagonal];
@@ -47,10 +41,7 @@ pub fn uv_embedding(
     for row in 0..rows {
         for column in 0..columns {
             let pixel = row * columns + column;
-            for (axis, position) in [coordinate(column, columns, 0), coordinate(row, rows, 1)]
-                .into_iter()
-                .enumerate()
-            {
+            for (axis, position) in [coordinate(column, columns, 0), coordinate(row, rows, 1)].into_iter().enumerate() {
                 sincos(position, half, &mut buffer);
                 for (k, value) in buffer.iter().enumerate() {
                     embedding[(axis * half + k) * rows * columns + pixel] = value * EMBED_RATIO as f32;

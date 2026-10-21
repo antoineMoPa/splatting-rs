@@ -22,13 +22,55 @@ struct CameraModelLayout {
 }
 
 const CAMERA_MODELS: [CameraModelLayout; 7] = [
-    CameraModelLayout { name: "SIMPLE_PINHOLE", param_count: 3, focal: [0, 0], principal_point: [1, 2], distortion: &[] },
-    CameraModelLayout { name: "PINHOLE", param_count: 4, focal: [0, 1], principal_point: [2, 3], distortion: &[] },
-    CameraModelLayout { name: "SIMPLE_RADIAL", param_count: 4, focal: [0, 0], principal_point: [1, 2], distortion: &[3] },
-    CameraModelLayout { name: "RADIAL", param_count: 5, focal: [0, 0], principal_point: [1, 2], distortion: &[3, 4] },
-    CameraModelLayout { name: "OPENCV", param_count: 8, focal: [0, 1], principal_point: [2, 3], distortion: &[4, 5, 6, 7] },
-    CameraModelLayout { name: "OPENCV_FISHEYE", param_count: 8, focal: [0, 1], principal_point: [2, 3], distortion: &[4, 5, 6, 7] },
-    CameraModelLayout { name: "FULL_OPENCV", param_count: 12, focal: [0, 1], principal_point: [2, 3], distortion: &[4, 5, 6, 7, 8, 9, 10, 11] },
+    CameraModelLayout {
+        name: "SIMPLE_PINHOLE",
+        param_count: 3,
+        focal: [0, 0],
+        principal_point: [1, 2],
+        distortion: &[],
+    },
+    CameraModelLayout {
+        name: "PINHOLE",
+        param_count: 4,
+        focal: [0, 1],
+        principal_point: [2, 3],
+        distortion: &[],
+    },
+    CameraModelLayout {
+        name: "SIMPLE_RADIAL",
+        param_count: 4,
+        focal: [0, 0],
+        principal_point: [1, 2],
+        distortion: &[3],
+    },
+    CameraModelLayout {
+        name: "RADIAL",
+        param_count: 5,
+        focal: [0, 0],
+        principal_point: [1, 2],
+        distortion: &[3, 4],
+    },
+    CameraModelLayout {
+        name: "OPENCV",
+        param_count: 8,
+        focal: [0, 1],
+        principal_point: [2, 3],
+        distortion: &[4, 5, 6, 7],
+    },
+    CameraModelLayout {
+        name: "OPENCV_FISHEYE",
+        param_count: 8,
+        focal: [0, 1],
+        principal_point: [2, 3],
+        distortion: &[4, 5, 6, 7],
+    },
+    CameraModelLayout {
+        name: "FULL_OPENCV",
+        param_count: 12,
+        focal: [0, 1],
+        principal_point: [2, 3],
+        distortion: &[4, 5, 6, 7, 8, 9, 10, 11],
+    },
 ];
 
 /// Intrinsics of one `cameras.txt` row, in this crate's pixel convention.
@@ -143,9 +185,7 @@ fn parse_images(text: &str, cameras: &BTreeMap<u32, ColmapCamera>) -> Result<Vec
 
 /// Reads `dir/cameras.txt` and `dir/images.txt`; images sorted by name.
 pub fn read_colmap_model(dir: &Path) -> Result<Vec<ColmapImage>> {
-    let read = |file: &str| {
-        std::fs::read_to_string(dir.join(file)).with_context(|| format!("reading {}", dir.join(file).display()))
-    };
+    let read = |file: &str| std::fs::read_to_string(dir.join(file)).with_context(|| format!("reading {}", dir.join(file).display()));
     let cameras = parse_cameras(&read("cameras.txt")?)?;
     parse_images(&read("images.txt")?, &cameras)
 }

@@ -169,14 +169,16 @@ fn print_object_offset(views: &[DenseView], group: &[usize]) {
     let objects: Vec<DenseView> = views.iter().map(object_only).collect();
     let (from, to): (Vec<(usize, &DenseView)>, Vec<(usize, &DenseView)>) =
         objects.iter().enumerate().partition(|(index, _)| group.contains(index));
-    let (from, to): (Vec<&DenseView>, Vec<&DenseView>) = (from.into_iter().map(|(_, v)| v).collect(), to.into_iter().map(|(_, v)| v).collect());
+    let (from, to): (Vec<&DenseView>, Vec<&DenseView>) =
+        (from.into_iter().map(|(_, v)| v).collect(), to.into_iter().map(|(_, v)| v).collect());
     let to_points = object_points(&to);
     let low = to_points.iter().fold(Vector3::repeat(f64::INFINITY), |low, p| low.inf(p));
     let high = to_points.iter().fold(Vector3::repeat(f64::NEG_INFINITY), |high, p| high.sup(p));
     let size = (high - low).norm();
     let from_points = object_points(&from);
     let centroid = from_points.iter().sum::<Vector3<f64>>() / from_points.len() as f64;
-    let transform = rigid_transform_between_groups(&from, &to, ICP_EXTENT_OVER_OBJECT_SIZE * size);
+    let transform = rigid_transform_between_groups(&from, &to, ICP_EXTENT_OVER_OBJECT_SIZE * size)
+        .unwrap_or_else(|no_shared_surface| panic!("object of views {group:?} onto the others': {no_shared_surface}"));
     let moved = transform.apply_point(&centroid) - centroid;
     println!(
         "object of views {group:?} onto the others' (ICP): centroid moved {:.2}% of the object's size, rotated {:.2}°",

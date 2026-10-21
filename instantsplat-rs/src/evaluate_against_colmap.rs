@@ -77,7 +77,13 @@ pub fn evaluate_against_colmap(
         let error = view_error(render, view);
         let comparison_path = out_dir.join(format!("heldout_{}.png", frame.name.trim_end_matches(".png")));
         side_by_side(&[view.to_rgb8(), render.to_rgb8()]).save(&comparison_path)?;
-        println!("  {}: {:.4} ({:.4}) {}", frame.name, error.all, error.foreground, comparison_path.display());
+        println!(
+            "  {}: {:.4} ({:.4}) {}",
+            frame.name,
+            error.all,
+            error.foreground,
+            comparison_path.display()
+        );
         errors.push((frame.name.clone(), error));
     }
     let mean = mean_error(&errors.iter().map(|(_, error)| *error).collect::<Vec<_>>());

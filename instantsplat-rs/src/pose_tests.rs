@@ -91,9 +91,15 @@ fn pose_gradient_matches_finite_differences_on_every_view() {
         let scene = Scene::new(&cloud, camera.clone());
         let pixel_count = (camera.width * camera.height) as usize;
         let weights: Vec<f32> = (0..pixel_count * 4).map(|_| rng.random_range(-1.0f32..1.0)).collect();
-        assert!(scene.render().rgbt.chunks(4).any(|p| p[3] < 0.5), "view {view}: scene too transparent");
+        assert!(
+            scene.render().rgbt.chunks(4).any(|p| p[3] < 0.5),
+            "view {view}: scene too transparent"
+        );
         let render_at = |correction: &PoseCorrection, focal_log_scale: f64| {
-            scene.rasterizer.render(&scene.gpu, &corrected_camera(initial, correction, focal_log_scale)).rgbt
+            scene
+                .rasterizer
+                .render(&scene.gpu, &corrected_camera(initial, correction, focal_log_scale))
+                .rgbt
         };
         let analytic_with = |weights: &[f32]| {
             scene.rasterizer.set_camera(&scene.gpu, &camera);
@@ -194,7 +200,11 @@ fn opaque_cloud(rng: &mut StdRng) -> GaussianCloud {
         sh_dc: Vec::new(),
     };
     for _ in 0..400 {
-        cloud.positions.extend([rng.random_range(-0.3f32..0.3), rng.random_range(-0.3f32..0.3), rng.random_range(2.0f32..3.0)]);
+        cloud.positions.extend([
+            rng.random_range(-0.3f32..0.3),
+            rng.random_range(-0.3f32..0.3),
+            rng.random_range(2.0f32..3.0),
+        ]);
         cloud.log_scales.extend((0..3).map(|_| rng.random_range(-4.6f32..-3.9)));
         cloud.rotations.extend((0..4).map(|_| rng.random_range(-1.0f32..1.0)));
         cloud.opacity_logits.push(rng.random_range(3.0f32..5.0));
@@ -230,8 +240,18 @@ fn perturbed_cameras_are_recovered() {
             if view == 0 {
                 return camera.clone();
             }
-            let axis = Vector3::new(rng.random_range(-1.0f64..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)).normalize();
-            let direction = Vector3::new(rng.random_range(-1.0f64..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)).normalize();
+            let axis = Vector3::new(
+                rng.random_range(-1.0f64..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+            )
+            .normalize();
+            let direction = Vector3::new(
+                rng.random_range(-1.0f64..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+            )
+            .normalize();
             corrected_camera(
                 camera,
                 &PoseCorrection {
@@ -247,7 +267,10 @@ fn perturbed_cameras_are_recovered() {
         .zip(&perturbed)
         .map(|(true_camera, camera)| synthetic_view(&scene, true_camera, camera.clone()))
         .collect();
-    assert!(views[0].foreground.iter().filter(|&&f| f).count() > 500, "the scene covers too little of the view");
+    assert!(
+        views[0].foreground.iter().filter(|&&f| f).count() > 500,
+        "the scene covers too little of the view"
+    );
 
     // The Gaussians held still; InstantSplat's pose rates, undecayed here (`step` with
     // factor 1), and the focal free so that its gradient is exercised too.
@@ -264,7 +287,9 @@ fn perturbed_cameras_are_recovered() {
     let gpu = Gpu::request();
     let mut trainer = Trainer::new(&gpu, &cloud, &views, gaussians_fixed, CameraPoses::Refined);
     let errors = |trainer: &Trainer| -> Vec<(f64, f64)> {
-        (1..3).map(|view| pose_distance(&trainer.camera(view), &true_cameras[view])).collect()
+        (1..3)
+            .map(|view| pose_distance(&trainer.camera(view), &true_cameras[view]))
+            .collect()
     };
     let before = errors(&trainer);
     let loss_before = trainer.loss_over_views().total;
@@ -274,11 +299,30 @@ fn perturbed_cameras_are_recovered() {
     let after = errors(&trainer);
     let loss_after = trainer.loss_over_views().total;
     println!("loss {loss_before:.5} -> {loss_after:.5}, pose errors (deg, distance) {before:?} -> {after:?}");
-    assert_eq!(trainer.camera(0).rotation, Matrix3::from(true_cameras[0].rotation), "view 0 is fixed");
+    assert_eq!(
+        trainer.camera(0).rotation,
+        Matrix3::from(true_cameras[0].rotation),
+        "view 0 is fixed"
+    );
     for view in 0..2 {
-        assert!((before[view].0 - 1.5).abs() < 1e-9 && (before[view].1 - 0.03).abs() < 1e-9, "{before:?}");
-        assert!(after[view].0 < before[view].0 / 10.0, "view {}: angle {:.4} -> {:.4} deg", view + 1, before[view].0, after[view].0);
-        assert!(after[view].1 < before[view].1 / 10.0, "view {}: center {:.5} -> {:.5}", view + 1, before[view].1, after[view].1);
+        assert!(
+            (before[view].0 - 1.5).abs() < 1e-9 && (before[view].1 - 0.03).abs() < 1e-9,
+            "{before:?}"
+        );
+        assert!(
+            after[view].0 < before[view].0 / 10.0,
+            "view {}: angle {:.4} -> {:.4} deg",
+            view + 1,
+            before[view].0,
+            after[view].0
+        );
+        assert!(
+            after[view].1 < before[view].1 / 10.0,
+            "view {}: center {:.5} -> {:.5}",
+            view + 1,
+            before[view].1,
+            after[view].1
+        );
     }
     // What remains is the alpha term on partially covered pixels, the same at every pose.
     assert!(loss_after < loss_before / 2.0, "loss {loss_before} -> {loss_after}");

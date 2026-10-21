@@ -140,20 +140,37 @@ fn main() -> Result<()> {
         ..DENSIFY_SHORT_RUN
     };
     println!("{densify:?}");
-    let all_variants = [("fixed count", args.stride, None), ("densified", args.densify_stride, Some(densify))];
-    let variants: Vec<(&str, usize, Option<DensifySettings>)> =
-        all_variants.into_iter().filter(|(_, _, settings)| settings.is_some() || !args.densified_only).collect();
+    let all_variants = [
+        ("fixed count", args.stride, None),
+        ("densified", args.densify_stride, Some(densify)),
+    ];
+    let variants: Vec<(&str, usize, Option<DensifySettings>)> = all_variants
+        .into_iter()
+        .filter(|(_, _, settings)| settings.is_some() || !args.densified_only)
+        .collect();
     let gpu = Gpu::request();
 
     let mut held_out_rows = Vec::new();
     for &held_out in &args.hold_out {
-        let training: Vec<DenseView> = views.iter().enumerate().filter(|(i, _)| *i != held_out).map(|(_, v)| v.clone()).collect();
+        let training: Vec<DenseView> = views
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != held_out)
+            .map(|(_, v)| v.clone())
+            .collect();
         for &(name, stride, settings) in &variants {
             let report = train(&gpu, &training, stride, args.steps, settings);
             let judge = Trainer::new(&gpu, &report.cloud, &views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
             let loss = judge.loss(held_out);
             let error = view_error(&judge.render(held_out), &views[held_out]);
-            held_out_rows.push((held_out, name, report.final_loss.total, loss.total, error.foreground, report.cloud.len()));
+            held_out_rows.push((
+                held_out,
+                name,
+                report.final_loss.total,
+                loss.total,
+                error.foreground,
+                report.cloud.len(),
+            ));
             judge
                 .render(held_out)
                 .to_rgb8()
@@ -174,12 +191,21 @@ fn main() -> Result<()> {
         }
         let path = args.out.join(format!("between{a}_{b}_{}.png", name.replace(' ', "_")));
         strip.save(&path)?;
-        between_rows.push((name, report.final_loss.total, report.densification_summary(), report.prune.kept, report.elapsed, path));
+        between_rows.push((
+            name,
+            report.final_loss.total,
+            report.densification_summary(),
+            report.prune.kept,
+            report.elapsed,
+            path,
+        ));
     }
 
     println!("\nleave one out ({} steps):", args.steps);
     for (held_out, name, train_loss, loss, error, count) in &held_out_rows {
-        println!("  view {held_out} {name:>11}: training loss {train_loss:.4}, held-out loss {loss:.4}, foreground error {error:.4}, {count} Gaussians");
+        println!(
+            "  view {held_out} {name:>11}: training loss {train_loss:.4}, held-out loss {loss:.4}, foreground error {error:.4}, {count} Gaussians"
+        );
     }
     for (name, ..) in &variants {
         let rows: Vec<_> = held_out_rows.iter().filter(|row| row.1 == *name).collect();
@@ -196,7 +222,10 @@ fn main() -> Result<()> {
     }
     println!("\nall views:");
     for (name, loss, summary, kept, elapsed, path) in between_rows {
-        println!("  {name:>11}: loss {loss:.4}, {summary}, kept {kept}, {elapsed:.1?}; {}", path.display());
+        println!(
+            "  {name:>11}: loss {loss:.4}, {summary}, kept {kept}, {elapsed:.1?}; {}",
+            path.display()
+        );
     }
     Ok(())
 }

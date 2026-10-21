@@ -20,8 +20,7 @@ pub fn replace_rays(view: &mut DenseView) {
         for x in 0..view.width {
             let i = y * view.width + x;
             let p = view.points[i];
-            let in_camera = world_to_camera_rotation * Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64)
-                + world_to_camera_translation;
+            let in_camera = world_to_camera_rotation * Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64) + world_to_camera_translation;
             let distance = in_camera.norm();
             let ray = Vector3::new((x as f64 - cx) / fx, (y as f64 - cy) / fy, 1.0).normalize();
             let world = camera_to_world_rotation * (ray * distance) + camera_to_world_translation;
@@ -76,7 +75,11 @@ mod tests {
         assert!((before.focal[0] - predicted_focal).abs() < 1e-2, "{:?}", before.focal);
         replace_rays(&mut view);
         let after = fit_pinhole(&view);
-        assert!((after.focal[0] - 100.0).abs() < 1e-2 && (after.focal[1] - 100.0).abs() < 1e-2, "{:?}", after.focal);
+        assert!(
+            (after.focal[0] - 100.0).abs() < 1e-2 && (after.focal[1] - 100.0).abs() < 1e-2,
+            "{:?}",
+            after.focal
+        );
         assert!((after.principal_point[0] - 31.5).abs() < 1e-2, "{:?}", after.principal_point);
         // The distance along the ray is kept: the center pixel's point did not move.
         let center = view.points[24 * width + 32];

@@ -26,47 +26,27 @@ fn fit_intrinsics(view: &ViewOutput) -> ([f64; 2], [f64; 2]) {
     for y in (0..view.height).step_by(step_y) {
         for x in (0..view.width).step_by(step_x) {
             let [px, py, pz] = view.points_in_camera[y * view.width + x].map(|c| c as f64);
-            for (axis, (pixel, coordinate)) in
-                [(x as f64, px), (y as f64, py)].into_iter().enumerate()
-            {
+            for (axis, (pixel, coordinate)) in [(x as f64, px), (y as f64, py)].into_iter().enumerate() {
                 let ratio = coordinate / pz;
                 normal[axis] += Matrix2::new(1.0, ratio, ratio, ratio * ratio);
                 rhs[axis] += Vector2::new(pixel, ratio * pixel);
             }
         }
     }
-    let solve = |axis: usize| -> Vector2<f64> {
-        normal[axis]
-            .lu()
-            .solve(&rhs[axis])
-            .expect("rays must vary across the image")
-    };
+    let solve = |axis: usize| -> Vector2<f64> { normal[axis].lu().solve(&rhs[axis]).expect("rays must vary across the image") };
     let (x, y) = (solve(0), solve(1));
     ([x[0], y[0]], [x[1], y[1]])
 }
 
-pub fn reconstruct(
-    model: &MapAnything,
-    images: &[InputImage],
-    device: &Device,
-) -> Result<Reconstruction> {
+pub fn reconstruct(model: &MapAnything, images: &[InputImage], device: &Device) -> Result<Reconstruction> {
     let started = Instant::now();
     let tensors: Vec<_> = images.iter().map(|image| image.tensor.clone()).collect();
     let intrinsics: Vec<_> = images.iter().map(|image| image.intrinsics).collect();
     let views = model.forward(&tensors, &intrinsics)?;
     device.synchronize()?;
-    println!(
-        "ran MapAnything on {} images in {:.2?}",
-        images.len(),
-        started.elapsed()
-    );
+    println!("ran MapAnything on {} images in {:.2?}", images.len(), started.elapsed());
 
-    let poses = relative_to_first(
-        &views
-            .iter()
-            .map(|view| (view.rotation, view.translation))
-            .collect::<Vec<_>>(),
-    );
+    let poses = relative_to_first(&views.iter().map(|view| (view.rotation, view.translation)).collect::<Vec<_>>());
     let fitted: Vec<([f64; 2], [f64; 2])> = views.iter().map(fit_intrinsics).collect();
     let mut point_maps: Vec<PointMap> = views
         .iter()
@@ -79,8 +59,7 @@ pub fn reconstruct(
                 .points_in_camera
                 .iter()
                 .map(|point| {
-                    let world =
-                        rotation * Vector3::from_fn(|axis, _| point[axis] as f64) + translation;
+                    let world = rotation * Vector3::from_fn(|axis, _| point[axis] as f64) + translation;
                     [world.x as f32, world.y as f32, world.z as f32]
                 })
                 .collect(),
@@ -103,15 +82,13 @@ pub fn reconstruct(
         .iter()
         .zip(&fitted)
         .zip(&depths)
-        .map(
-            |(((rotation, translation), (center, focal)), depth)| DepthView {
-                rotation: *rotation,
-                translation: *translation,
-                focal: (focal[0] + focal[1]) / 2.0,
-                principal_point: *center,
-                depth,
-            },
-        )
+        .map(|(((rotation, translation), (center, focal)), depth)| DepthView {
+            rotation: *rotation,
+            translation: *translation,
+            focal: (focal[0] + focal[1]) / 2.0,
+            principal_point: *center,
+            depth,
+        })
         .collect();
     zero_conf_in_front_of_other_views(&mut point_maps, &depth_views);
 
@@ -124,8 +101,5 @@ pub fn reconstruct(
             focal: (focal[0] + focal[1]) / 2.0,
         })
         .collect();
-    Ok(Reconstruction {
-        point_maps,
-        cameras,
-    })
+    Ok(Reconstruction { point_maps, cameras })
 }

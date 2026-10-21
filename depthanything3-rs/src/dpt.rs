@@ -133,8 +133,7 @@ impl FeatureFusionBlock {
             (None, None) => xs.clone(),
             _ => panic!("skip input and skip unit must come together"),
         };
-        self.out_conv
-            .forward(&resize_bilinear(&self.unit.forward(&xs)?, out_size)?)
+        self.out_conv.forward(&resize_bilinear(&self.unit.forward(&xs)?, out_size)?)
     }
 }
 
@@ -148,9 +147,7 @@ impl FusionChain {
     fn new(features: usize, suffix: &str, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             refinenets: (1..=4)
-                .map(|level| {
-                    FeatureFusionBlock::new(features, level < 4, vb.pp(format!("refinenet{level}{suffix}")))
-                })
+                .map(|level| FeatureFusionBlock::new(features, level < 4, vb.pp(format!("refinenet{level}{suffix}"))))
                 .collect::<Result<_>>()?,
         })
     }
@@ -247,13 +244,7 @@ impl DualDptHead {
     /// `xs` + the sinusoidal embedding of its pixels' positions on the `(height, width)` image.
     fn add_uv_embedding(xs: &Tensor, (height, width): (usize, usize)) -> Result<Tensor> {
         let (_, channels, rows, columns) = xs.dims4()?;
-        let embedding = uv_embedding(
-            channels,
-            (rows, columns),
-            width as f64 / height as f64,
-            xs.device(),
-            xs.dtype(),
-        )?;
+        let embedding = uv_embedding(channels, (rows, columns), width as f64 / height as f64, xs.device(), xs.dtype())?;
         xs.broadcast_add(&embedding)
     }
 
@@ -283,11 +274,7 @@ impl DualDptHead {
         for (hook, tokens) in layers.iter().enumerate() {
             let (views, patches, dim) = tokens.dims3()?;
             assert_eq!(patches, rows * columns, "layer {hook} token count");
-            let spatial = self
-                .norm
-                .forward(tokens)?
-                .transpose(1, 2)?
-                .reshape((views, dim, rows, columns))?;
+            let spatial = self.norm.forward(tokens)?.transpose(1, 2)?.reshape((views, dim, rows, columns))?;
             let projected = Self::add_uv_embedding(&self.projections[hook].forward(&spatial)?, image_size)?;
             pyramid.push(self.to_features[hook].forward(&self.resamplers[hook].forward(&projected)?)?);
         }
@@ -295,17 +282,13 @@ impl DualDptHead {
 
         let fused = self.depth_pre_output.forward(&self.depth_chain.forward(&pyramid)?)?;
         let fused = Self::add_uv_embedding(&resize_bilinear(&fused, image_size)?, image_size)?;
-        let depth_logits = self
-            .depth_output[1]
-            .forward(&self.depth_output[0].forward(&fused)?.relu()?)?;
+        let depth_logits = self.depth_output[1].forward(&self.depth_output[0].forward(&fused)?.relu()?)?;
 
         let mut rays = self.ray_chain.forward(&pyramid)?;
         for layer in &self.ray_pre_output {
             rays = layer.forward(&rays)?;
         }
-        let rays = self
-            .ray_output_conv
-            .forward(&Self::add_uv_embedding(&rays, image_size)?)?;
+        let rays = self.ray_output_conv.forward(&Self::add_uv_embedding(&rays, image_size)?)?;
         // The LayerNorm is over the channels: [views, C, h, w] -> [views, h, w, C] and back.
         let rays = self
             .ray_output_norm
@@ -313,9 +296,6 @@ impl DualDptHead {
             .permute((0, 3, 1, 2))?
             .contiguous()?;
         let ray_logits = self.ray_output.forward(&rays.relu()?)?;
-        Ok(DenseOutput {
-            depth_logits,
-            ray_logits,
-        })
+        Ok(DenseOutput { depth_logits, ray_logits })
     }
 }

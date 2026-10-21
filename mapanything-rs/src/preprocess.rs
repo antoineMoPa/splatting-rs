@@ -30,11 +30,7 @@ const COVER_SCALE_EPS: f64 = 1e-8;
 
 /// The table entry closest to the mean aspect ratio; ties go to the smaller ratio.
 fn input_size(images: &[DynamicImage]) -> (u32, u32) {
-    let mean_aspect = images
-        .iter()
-        .map(|image| image.width() as f64 / image.height() as f64)
-        .sum::<f64>()
-        / images.len() as f64;
+    let mean_aspect = images.iter().map(|image| image.width() as f64 / image.height() as f64).sum::<f64>() / images.len() as f64;
     let mut best = SIZE_BY_ASPECT[0];
     for entry in SIZE_BY_ASPECT {
         if (entry.0 - mean_aspect).abs() < (best.0 - mean_aspect).abs() {
@@ -46,13 +42,8 @@ fn input_size(images: &[DynamicImage]) -> (u32, u32) {
 
 /// Resizes to cover (width, height), Lanczos to shrink and bicubic to enlarge as PIL in the
 /// reference, then crops the center. Extends `mapping` (onto `image`) to the result.
-fn cover_and_crop(
-    image: &DynamicImage,
-    mapping: PixelMapping,
-    (width, height): (u32, u32),
-) -> (DynamicImage, PixelMapping) {
-    let scale = (width as f64 / image.width() as f64).max(height as f64 / image.height() as f64)
-        + COVER_SCALE_EPS;
+fn cover_and_crop(image: &DynamicImage, mapping: PixelMapping, (width, height): (u32, u32)) -> (DynamicImage, PixelMapping) {
+    let scale = (width as f64 / image.width() as f64).max(height as f64 / image.height() as f64) + COVER_SCALE_EPS;
     let filter = if scale < 1.0 {
         FilterType::Lanczos3
     } else {
@@ -72,17 +63,9 @@ fn cover_and_crop(
 }
 
 /// `focal_35mm` overrides every photo's EXIF focal length (35 mm equivalent, in mm).
-pub fn load_images(
-    paths: &[impl AsRef<Path>],
-    focal_35mm: Option<f64>,
-    dtype: DType,
-    device: &Device,
-) -> Result<Vec<InputImage>> {
+pub fn load_images(paths: &[impl AsRef<Path>], focal_35mm: Option<f64>, dtype: DType, device: &Device) -> Result<Vec<InputImage>> {
     ensure!(!paths.is_empty(), "no images");
-    let cutouts = paths
-        .iter()
-        .map(|path| load_cutout(path.as_ref()))
-        .collect::<Result<Vec<_>>>()?;
+    let cutouts = paths.iter().map(|path| load_cutout(path.as_ref())).collect::<Result<Vec<_>>>()?;
     let images: Vec<DynamicImage> = cutouts.iter().map(|cutout| cutout.image.clone()).collect();
     let size = input_size(&images);
     cutouts
@@ -90,9 +73,7 @@ pub fn load_images(
         .zip(paths)
         .map(|(cutout, path)| {
             let (resized, mapping) = cover_and_crop(&cutout.image, cutout.mapping, size);
-            let intrinsics = focal_35mm
-                .or(cutout.focal_35mm)
-                .map(|focal| cutout.intrinsics(mapping, focal));
+            let intrinsics = focal_35mm.or(cutout.focal_35mm).map(|focal| cutout.intrinsics(mapping, focal));
             let rgba = resized.to_rgba8();
             to_model_input(rgba, intrinsics, path.as_ref(), dtype, device)
         })

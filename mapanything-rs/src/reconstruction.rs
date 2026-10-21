@@ -19,9 +19,7 @@ pub struct Reconstruction {
 }
 
 /// Re-expresses camera-to-world poses relative to the first camera.
-pub fn relative_to_first(
-    poses: &[(Matrix3<f64>, Vector3<f64>)],
-) -> Vec<(Matrix3<f64>, Vector3<f64>)> {
+pub fn relative_to_first(poses: &[(Matrix3<f64>, Vector3<f64>)]) -> Vec<(Matrix3<f64>, Vector3<f64>)> {
     let (first_rotation, first_translation) = poses[0];
     poses
         .iter()

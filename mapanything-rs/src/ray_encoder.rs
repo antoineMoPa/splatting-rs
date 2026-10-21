@@ -80,11 +80,7 @@ impl RayEncoder {
         for block in &self.blocks {
             xs = block.forward(&xs)?;
         }
-        let xs = self
-            .conv_out
-            .forward(&xs)?
-            .flatten_from(2)?
-            .transpose(1, 2)?;
+        let xs = self.conv_out.forward(&xs)?.flatten_from(2)?.transpose(1, 2)?;
         self.norm.forward(&xs)
     }
 }
@@ -97,21 +93,12 @@ mod tests {
     #[test]
     fn pixel_unshuffle_orders_channel_then_row_then_column() {
         // One channel, 2x4 image, factor 2: two 2x2 blocks.
-        let xs = Tensor::arange(0f32, 8.0, &Device::Cpu)
-            .unwrap()
-            .reshape((1, 1, 2, 4))
-            .unwrap();
-        let out = pixel_unshuffle(&xs, 2)
-            .unwrap()
-            .squeeze(0)
-            .unwrap()
-            .to_vec3::<f32>()
-            .unwrap();
+        let xs = Tensor::arange(0f32, 8.0, &Device::Cpu).unwrap().reshape((1, 1, 2, 4)).unwrap();
+        let out = pixel_unshuffle(&xs, 2).unwrap().squeeze(0).unwrap().to_vec3::<f32>().unwrap();
         // Output channel (row i, column j within the block) holds that pixel of each block:
         // block 0 is [[0, 1], [4, 5]], block 1 is [[2, 3], [6, 7]].
         let expected = [[0.0, 2.0], [1.0, 3.0], [4.0, 6.0], [5.0, 7.0]];
-        let expected: Vec<Vec<Vec<f32>>> =
-            expected.iter().map(|pair| vec![pair.to_vec()]).collect();
+        let expected: Vec<Vec<Vec<f32>>> = expected.iter().map(|pair| vec![pair.to_vec()]).collect();
         assert_eq!(out, expected);
     }
 }

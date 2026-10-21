@@ -46,9 +46,7 @@ pub fn rope_tables(positions: &[[u32; 2]], device: &Device, dtype: DType) -> Res
             }
         }
     }
-    let table = |values: Vec<f32>| -> Result<Tensor> {
-        Tensor::from_vec(values, (1, 1, tokens, HEAD_DIM), device)?.to_dtype(dtype)
-    };
+    let table = |values: Vec<f32>| -> Result<Tensor> { Tensor::from_vec(values, (1, 1, tokens, HEAD_DIM), device)?.to_dtype(dtype) };
     Ok(RopeTables {
         cos: table(cos)?,
         sin: table(sin)?,
@@ -70,11 +68,7 @@ fn rotate_pairs(xs: &Tensor) -> Result<Tensor> {
 impl RopeTables {
     /// `xs`: [batch, heads, tokens, HEAD_DIM].
     pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
-        assert_eq!(
-            xs.dim(2)?,
-            self.cos.dim(2)?,
-            "RoPE tables were built for a different token count"
-        );
+        assert_eq!(xs.dim(2)?, self.cos.dim(2)?, "RoPE tables were built for a different token count");
         xs.broadcast_mul(&self.cos)? + rotate_pairs(xs)?.broadcast_mul(&self.sin)?
     }
 }

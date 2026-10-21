@@ -148,14 +148,17 @@ fn png_bytes(view: &DenseView) -> Result<Vec<u8>> {
 #[wasm_bindgen]
 pub fn reconstruct(focal_35mm: Option<f64>, progress: &js_sys::Function) -> Result<Reconstructed, JsError> {
     let photos = PHOTOS.with(|photos| std::mem::take(&mut *photos.borrow_mut()));
-    MODEL.with(|model| {
-        let model = model.borrow();
-        let (network, model) = model.as_ref().expect("load_da3 first");
-        reconstruct_photos(*network, model, &photos, focal_35mm, &mut |label| {
-            progress.call1(&JsValue::NULL, &JsValue::from_str(label)).expect("progress callback");
+    MODEL
+        .with(|model| {
+            let model = model.borrow();
+            let (network, model) = model.as_ref().expect("load_da3 first");
+            reconstruct_photos(*network, model, &photos, focal_35mm, &mut |label| {
+                progress
+                    .call1(&JsValue::NULL, &JsValue::from_str(label))
+                    .expect("progress callback");
+            })
         })
-    })
-    .map_err(js_error)
+        .map_err(js_error)
 }
 
 fn reconstruct_photos(
@@ -165,7 +168,11 @@ fn reconstruct_photos(
     focal_35mm: Option<f64>,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Reconstructed> {
-    ensure!(photos.len() >= MIN_PHOTOS, "{} photos: reconstruction needs at least {MIN_PHOTOS}", photos.len());
+    ensure!(
+        photos.len() >= MIN_PHOTOS,
+        "{} photos: reconstruction needs at least {MIN_PHOTOS}",
+        photos.len()
+    );
     let device = Device::Cpu;
     let started = Instant::now();
     let inputs = model_inputs_from_cutouts(photos, focal_35mm, DType::F32, &device)?;
@@ -175,8 +182,7 @@ fn reconstruct_photos(
 
     let started = Instant::now();
     let depth = model.variant().spec().depth;
-    let reconstruction =
-        reconstruct_with_progress(model, &inputs, &device, &mut |stage| progress(&stage_label(stage, depth)))?;
+    let reconstruction = reconstruct_with_progress(model, &inputs, &device, &mut |stage| progress(&stage_label(stage, depth)))?;
     let inference = started.elapsed();
 
     let started = Instant::now();

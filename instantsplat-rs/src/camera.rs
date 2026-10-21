@@ -88,7 +88,6 @@ impl PinholeCamera {
             ..self.clone()
         }
     }
-
 }
 
 /// Radius of the smallest sphere centered on the mean camera position that contains every
@@ -96,15 +95,8 @@ impl PinholeCamera {
 /// learning rate.
 pub fn cameras_extent(cameras: &[PinholeCamera]) -> f64 {
     assert!(!cameras.is_empty(), "no cameras");
-    let center = cameras
-        .iter()
-        .map(PinholeCamera::position)
-        .sum::<Vector3<f64>>()
-        / cameras.len() as f64;
-    let radius = cameras
-        .iter()
-        .map(|camera| (camera.position() - center).norm())
-        .fold(0.0, f64::max);
+    let center = cameras.iter().map(PinholeCamera::position).sum::<Vector3<f64>>() / cameras.len() as f64;
+    let radius = cameras.iter().map(|camera| (camera.position() - center).norm()).fold(0.0, f64::max);
     radius * 1.1
 }
 

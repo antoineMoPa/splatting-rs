@@ -19,7 +19,10 @@ const HOLD_OUT_EVERY: usize = 10;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    ensure!(args.len() == 3, "usage: refine_with_colmap <fit run dir> <colmap sparse_txt dir> <frames dir>");
+    ensure!(
+        args.len() == 3,
+        "usage: refine_with_colmap <fit run dir> <colmap sparse_txt dir> <frames dir>"
+    );
 
     run_refine(&RefineSettings {
         run: PathBuf::from(&args[0]),

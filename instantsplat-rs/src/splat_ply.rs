@@ -11,8 +11,8 @@ use crate::gaussians::GaussianCloud;
 
 /// In the order written, after x, y, z, nx, ny, nz.
 const PROPERTIES: [&str; 17] = [
-    "x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1",
-    "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
+    "x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2",
+    "rot_3",
 ];
 
 pub fn write_splat_ply(path: &Path, cloud: &GaussianCloud) -> Result<()> {
@@ -81,10 +81,12 @@ pub fn parse_splat_ply(mut reader: impl BufRead, label: &str) -> Result<Gaussian
             .position(|p| p == name)
             .with_context(|| format!("{label}: no property {name}"))
     };
-    let columns: Vec<usize> = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
-        .iter()
-        .map(|name| column(name))
-        .collect::<Result<_>>()?;
+    let columns: Vec<usize> = [
+        "x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
+    ]
+    .iter()
+    .map(|name| column(name))
+    .collect::<Result<_>>()?;
 
     let mut bytes = vec![0u8; count * properties.len() * 4];
     reader.read_exact(&mut bytes)?;
@@ -130,7 +132,9 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         let header_end = bytes.windows(11).position(|w| w == b"end_header\n").unwrap() + 11;
         assert_eq!(bytes.len(), header_end + 2 * PROPERTIES.len() * 4);
-        assert!(std::str::from_utf8(&bytes[..header_end]).unwrap().contains("property float f_dc_0\nproperty float f_dc_1\nproperty float f_dc_2\nproperty float opacity\nproperty float scale_0\n"));
+        assert!(std::str::from_utf8(&bytes[..header_end]).unwrap().contains(
+            "property float f_dc_0\nproperty float f_dc_1\nproperty float f_dc_2\nproperty float opacity\nproperty float scale_0\n"
+        ));
         let back = read_splat_ply(&path).unwrap();
         assert_eq!(back, cloud);
         std::fs::remove_dir_all(&dir).unwrap();

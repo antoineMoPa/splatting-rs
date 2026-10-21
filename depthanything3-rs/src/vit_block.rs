@@ -42,8 +42,7 @@ fn split_heads(xs: &Tensor) -> Result<Tensor> {
 /// [batch, heads, tokens, HEAD_DIM] -> [batch, tokens, heads * HEAD_DIM]
 fn merge_heads(xs: &Tensor) -> Result<Tensor> {
     let (batch, heads, token_count, head_dim) = xs.dims4()?;
-    xs.transpose(1, 2)?
-        .reshape((batch, token_count, heads * head_dim))
+    xs.transpose(1, 2)?.reshape((batch, token_count, heads * head_dim))
 }
 
 /// `q`, `k`, `v`: [batch, heads, tokens, HEAD_DIM].

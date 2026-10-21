@@ -51,9 +51,7 @@ impl AlternatingAttention {
         let view_count = views.len();
         let patch_count = views[0].patches.dim(1)?;
         assert!(
-            views
-                .iter()
-                .all(|view| view.patches.dim(1).unwrap() == patch_count),
+            views.iter().all(|view| view.patches.dim(1).unwrap() == patch_count),
             "every view must have the same patch grid"
         );
         // Per view [patches, class], view 0 marked as the reference.
@@ -78,9 +76,7 @@ impl AlternatingAttention {
                 block.forward(&xs)?
             } else {
                 // Each view attends within itself; the scale token waits.
-                let per_view =
-                    xs.narrow(1, 0, view_tokens)?
-                        .reshape((view_count, tokens_per_view, DIM))?;
+                let per_view = xs.narrow(1, 0, view_tokens)?.reshape((view_count, tokens_per_view, DIM))?;
                 let attended = block.forward(&per_view)?.reshape((1, view_tokens, DIM))?;
                 Tensor::cat(&[attended, xs.narrow(1, view_tokens, 1)?], 1)?
             };
@@ -89,9 +85,7 @@ impl AlternatingAttention {
             }
         }
 
-        let patches_of = |sequence: &Tensor, view: usize| {
-            sequence.narrow(1, view * tokens_per_view, patch_count)
-        };
+        let patches_of = |sequence: &Tensor, view: usize| sequence.narrow(1, view * tokens_per_view, patch_count);
         let per_view = (0..view_count)
             .map(|view| {
                 Ok([

@@ -31,8 +31,7 @@ fn bicubic_taps(input: usize, output: usize, scale: f64) -> Vec<([usize; 4], [f6
         .map(|out| {
             let source = (out as f64 + 0.5) / scale - 0.5;
             let floor = source.floor();
-            let indices = [-1i64, 0, 1, 2]
-                .map(|offset| (floor as i64 + offset).clamp(0, input as i64 - 1) as usize);
+            let indices = [-1i64, 0, 1, 2].map(|offset| (floor as i64 + offset).clamp(0, input as i64 - 1) as usize);
             (indices, bicubic_weights(source - floor))
         })
         .collect()
@@ -68,9 +67,7 @@ pub fn resize_grid(
                 resized[target + channel] = indices
                     .iter()
                     .zip(weights)
-                    .map(|(&row, &weight)| {
-                        weight * horizontal[(row * out_columns + out_column) * channels + channel]
-                    })
+                    .map(|(&row, &weight)| weight * horizontal[(row * out_columns + out_column) * channels + channel])
                     .sum::<f64>() as f32;
             }
         }
@@ -94,13 +91,7 @@ impl Dinov2 {
             ..Default::default()
         };
         Ok(Self {
-            patch_embed: candle_nn::conv2d(
-                3,
-                DIM,
-                PATCH_SIZE,
-                patch_config,
-                vb.pp("patch_embed.proj"),
-            )?,
+            patch_embed: candle_nn::conv2d(3, DIM, PATCH_SIZE, patch_config, vb.pp("patch_embed.proj"))?,
             cls_token: vb.get((1, 1, DIM), "cls_token")?,
             pos_embed: vb
                 .get((1, 1 + TRAINED_GRID * TRAINED_GRID, DIM), "pos_embed")?
@@ -130,13 +121,7 @@ impl Dinov2 {
             (rows, columns),
             (scale(rows), scale(columns)),
         );
-        Tensor::cat(
-            &[
-                class,
-                Tensor::from_vec(resized, (1, rows * columns, DIM), &Device::Cpu)?,
-            ],
-            1,
-        )
+        Tensor::cat(&[class, Tensor::from_vec(resized, (1, rows * columns, DIM), &Device::Cpu)?], 1)
     }
 
     /// `image`: [1, 3, H, W], DINOv2-normalized, H and W multiples of PATCH_SIZE.
@@ -147,11 +132,7 @@ impl Dinov2 {
             height % PATCH_SIZE == 0 && width % PATCH_SIZE == 0,
             "image {width}x{height} is not a multiple of the {PATCH_SIZE} px patch"
         );
-        let patches = self
-            .patch_embed
-            .forward(image)?
-            .flatten_from(2)?
-            .transpose(1, 2)?;
+        let patches = self.patch_embed.forward(image)?.flatten_from(2)?.transpose(1, 2)?;
         let positional = self
             .positional_embedding(height / PATCH_SIZE, width / PATCH_SIZE)?
             .to_dtype(image.dtype())?

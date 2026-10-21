@@ -145,13 +145,30 @@ impl Adam {
         let count = gaussian_count * PARAM_STRIDE;
         let first_moment = gpu.storage_buffer("adam first moment", (count * 4) as u64);
         let second_moment = gpu.storage_buffer("adam second moment", (count * 4) as u64);
-        Self::with_state(gpu, params, gradients, gaussian_count, learning_rates, position_scale, 0, first_moment, second_moment)
+        Self::with_state(
+            gpu,
+            params,
+            gradients,
+            gaussian_count,
+            learning_rates,
+            position_scale,
+            0,
+            first_moment,
+            second_moment,
+        )
     }
 
     /// This optimizer over another set of Gaussians (`gaussian_count` of them in
     /// `params`, their gradients in `gradients`) starting from `moments`: the step count
     /// and learning rates carry on.
-    pub fn resumed(&self, gpu: &Gpu, params: &wgpu::Buffer, gradients: &wgpu::Buffer, gaussian_count: usize, moments: &AdamMoments) -> Self {
+    pub fn resumed(
+        &self,
+        gpu: &Gpu,
+        params: &wgpu::Buffer,
+        gradients: &wgpu::Buffer,
+        gaussian_count: usize,
+        moments: &AdamMoments,
+    ) -> Self {
         let count = gaussian_count * PARAM_STRIDE;
         assert_eq!(moments.first.len(), count, "first moment length");
         assert_eq!(moments.second.len(), count, "second moment length");
@@ -196,10 +213,7 @@ impl Adam {
         };
         let uniform = gpu.uniform_buffer("adam step", &settings);
         let pipeline = gpu.compute_pipeline("adam", &shaders::adam(), "main");
-        let bind_group = gpu.bind_group(
-            &pipeline,
-            &[params, gradients, &first_moment, &second_moment, &uniform],
-        );
+        let bind_group = gpu.bind_group(&pipeline, &[params, gradients, &first_moment, &second_moment, &uniform]);
         let limits = gpu.uniform_buffer(
             "scale limits",
             &ScaleLimitsUniform {
@@ -232,17 +246,15 @@ impl Adam {
     /// by `position_rate_factor`, then the scale limits. Each step must be submitted
     /// before the next is encoded: the step counter travels in a uniform.
     pub fn encode_step(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, position_rate_factor: f32) {
-        assert!(position_rate_factor > 0.0 && position_rate_factor <= 1.0, "position rate factor {position_rate_factor}");
+        assert!(
+            position_rate_factor > 0.0 && position_rate_factor <= 1.0,
+            "position rate factor {position_rate_factor}"
+        );
         self.step += 1;
         self.settings.step = self.step;
         self.settings.learning_rate_by_slot = self.learning_rates.by_slot(self.position_scale * position_rate_factor);
         gpu.write(&self.uniform, &[self.settings]);
-        dispatch(
-            encoder,
-            &self.pipeline,
-            &self.bind_group,
-            workgroups(self.count, 256),
-        );
+        dispatch(encoder, &self.pipeline, &self.bind_group, workgroups(self.count, 256));
         dispatch(
             encoder,
             &self.clamp_scales,

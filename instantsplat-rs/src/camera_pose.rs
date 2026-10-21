@@ -179,15 +179,33 @@ mod tests {
         for axis in 0..3 {
             let mut delta = Vector3::zeros();
             delta[axis] = epsilon;
-            let rotated = |sign: f64| PoseCorrection { rotation: correction.rotation + sign * delta, ..correction };
+            let rotated = |sign: f64| PoseCorrection {
+                rotation: correction.rotation + sign * delta,
+                ..correction
+            };
             let numeric = (loss(&rotated(1.0), focal_log_scale) - loss(&rotated(-1.0), focal_log_scale)) / (2.0 * epsilon);
-            assert!((numeric - analytic.rotation[axis]).abs() < 1e-6, "rotation {axis}: {numeric} vs {}", analytic.rotation[axis]);
-            let moved = |sign: f64| PoseCorrection { translation: correction.translation + sign * delta, ..correction };
+            assert!(
+                (numeric - analytic.rotation[axis]).abs() < 1e-6,
+                "rotation {axis}: {numeric} vs {}",
+                analytic.rotation[axis]
+            );
+            let moved = |sign: f64| PoseCorrection {
+                translation: correction.translation + sign * delta,
+                ..correction
+            };
             let numeric = (loss(&moved(1.0), focal_log_scale) - loss(&moved(-1.0), focal_log_scale)) / (2.0 * epsilon);
-            assert!((numeric - analytic.translation[axis]).abs() < 1e-6, "translation {axis}: {numeric} vs {}", analytic.translation[axis]);
+            assert!(
+                (numeric - analytic.translation[axis]).abs() < 1e-6,
+                "translation {axis}: {numeric} vs {}",
+                analytic.translation[axis]
+            );
         }
         let numeric = (loss(&correction, focal_log_scale + epsilon) - loss(&correction, focal_log_scale - epsilon)) / (2.0 * epsilon);
-        assert!((numeric - analytic.focal_log_scale).abs() < 1e-6, "focal: {numeric} vs {}", analytic.focal_log_scale);
+        assert!(
+            (numeric - analytic.focal_log_scale).abs() < 1e-6,
+            "focal: {numeric} vs {}",
+            analytic.focal_log_scale
+        );
     }
 
     #[test]

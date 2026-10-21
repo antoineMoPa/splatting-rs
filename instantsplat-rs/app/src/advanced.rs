@@ -66,7 +66,11 @@ impl App {
         });
         ui.end_row();
         ui.label("");
-        look::muted(ui, "Run on every reconstruction; 0 shows the network's Gaussians untrained.", FOOTER_SIZE);
+        look::muted(
+            ui,
+            "Run on every reconstruction; 0 shows the network's Gaussians untrained.",
+            FOOTER_SIZE,
+        );
         ui.end_row();
         ui.label("");
         let label = format!("Train {} more steps", self.train_steps);

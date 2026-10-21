@@ -38,9 +38,7 @@ fn main() -> Result<()> {
     );
 
     let device = Device::new_metal(0)?;
-    let weights = hf_hub::api::sync::Api::new()?
-        .model(WEIGHTS_REPO.to_string())
-        .get(WEIGHTS_FILE)?;
+    let weights = hf_hub::api::sync::Api::new()?.model(WEIGHTS_REPO.to_string()).get(WEIGHTS_FILE)?;
     // SAFETY: the checkpoint file is not modified while mapped.
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&weights], DType::F16, &device)? };
     let model = MapAnything::new(vb)?;

@@ -24,9 +24,9 @@ use mapanything_rs::image_input::InputImage;
 
 use crate::camera::PinholeCamera;
 use crate::dense_view::DenseView;
+use crate::network::use_given_intrinsics;
 #[cfg(feature = "networks")]
 use crate::network::{NetworkSettings, NetworkTiming, device};
-use crate::network::use_given_intrinsics;
 
 /// Upstream's default; every pose is moved to view 0's frame afterwards anyway.
 #[cfg(feature = "networks")]
@@ -50,7 +50,13 @@ pub fn dense_views(images: &[PathBuf], settings: &NetworkSettings, variant: Vari
     let inference = started.elapsed();
 
     let views = dense_views_from_reconstruction(&reconstruction, &inputs);
-    Ok((views, NetworkTiming { load_weights: loaded.load_time, inference }))
+    Ok((
+        views,
+        NetworkTiming {
+            load_weights: loaded.load_time,
+            inference,
+        },
+    ))
 }
 
 /// DA3's reconstruction of `inputs` (the images it ran on, in the same order) as views:

@@ -86,7 +86,11 @@ pub fn training_view_from_image(
     let resized = if (width, height) == (camera.width, camera.height) {
         composited
     } else {
-        let filter = if width < camera.width { FilterType::Lanczos3 } else { FilterType::CatmullRom };
+        let filter = if width < camera.width {
+            FilterType::Lanczos3
+        } else {
+            FilterType::CatmullRom
+        };
         DynamicImage::ImageRgba8(composited).resize_exact(width, height, filter).to_rgba8()
     };
     let foreground: Vec<bool> = resized.pixels().map(|pixel| pixel[3] >= FOREGROUND_MIN_ALPHA).collect();
@@ -168,7 +172,13 @@ mod tests {
         let gray = 128.0 / 255.0;
         let foreground: Vec<bool> = (0..width * height).map(|i| i % 3 != 0).collect();
         let rgb: Vec<f32> = (0..width * height)
-            .flat_map(|i| if foreground[i] { [(i % 7) as f32 / 6.0, 0.25, 1.0 - (i % 5) as f32 / 4.0] } else { [gray; 3] })
+            .flat_map(|i| {
+                if foreground[i] {
+                    [(i % 7) as f32 / 6.0, 0.25, 1.0 - (i % 5) as f32 / 4.0]
+                } else {
+                    [gray; 3]
+                }
+            })
             .collect();
         let view = DenseView {
             width,
@@ -179,7 +189,13 @@ mod tests {
             rgb: rgb.clone(),
             camera: camera.clone(),
         };
-        let back = training_view_from_image(DynamicImage::ImageRgba8(view.to_rgba8()), "view", &camera, (width as u32, height as u32)).unwrap();
+        let back = training_view_from_image(
+            DynamicImage::ImageRgba8(view.to_rgba8()),
+            "view",
+            &camera,
+            (width as u32, height as u32),
+        )
+        .unwrap();
         assert_eq!(back.foreground, foreground);
         for (a, b) in back.rgb.iter().zip(&rgb) {
             assert!((a - b).abs() <= 0.5 / 255.0 + 1e-6, "{a} vs {b}");

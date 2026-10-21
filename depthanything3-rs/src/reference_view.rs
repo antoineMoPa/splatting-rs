@@ -63,8 +63,7 @@ pub fn select_reference_view(class_tokens: &[Vec<f32>], strategy: ReferenceViewS
                 })
                 .collect();
             let variances: Vec<f64> = unit.iter().map(|token| variance(token)).collect();
-            let [similarity, norm, var] =
-                [mean_similarity, norms, variances].map(|metric| min_max_scaled(&metric));
+            let [similarity, norm, var] = [mean_similarity, norms, variances].map(|metric| min_max_scaled(&metric));
             let balance: Vec<f64> = (0..views)
                 .map(|i| (similarity[i] - 0.5).abs() + (norm[i] - 0.5).abs() + (var[i] - 0.5).abs())
                 .collect();
@@ -119,11 +118,7 @@ mod tests {
     #[test]
     fn saddle_balanced_picks_the_median_view() {
         // Three tokens on a line: the middle one is the most median in every metric.
-        let tokens = vec![
-            vec![1.0, 0.0, 0.0, 0.1],
-            vec![1.0, 0.5, 0.0, 0.2],
-            vec![1.0, 1.0, 0.0, 0.3],
-        ];
+        let tokens = vec![vec![1.0, 0.0, 0.0, 0.1], vec![1.0, 0.5, 0.0, 0.2], vec![1.0, 1.0, 0.0, 0.3]];
         assert_eq!(select_reference_view(&tokens, ReferenceViewStrategy::SaddleBalanced), 1);
     }
 }

@@ -42,8 +42,7 @@ impl DenseView {
                 let (nx, ny) = (x as isize + dx, y as isize + dy);
                 let inside = nx >= 0 && ny >= 0 && (nx as usize) < self.width && (ny as usize) < self.height;
                 let neighbor = (nx as usize, ny as usize);
-                (inside && self.keeps(neighbor.0, neighbor.1, settings.min_conf))
-                    .then(|| self.distance((x, y), neighbor))
+                (inside && self.keeps(neighbor.0, neighbor.1, settings.min_conf)).then(|| self.distance((x, y), neighbor))
             })
             .filter(|spacing| *spacing > 0.0)
             .min_by(|a, b| a.partial_cmp(b).expect("finite spacing"))
@@ -75,9 +74,7 @@ pub fn gaussians_from_dense_views(views: &[DenseView], settings: InitSettings) -
                 cloud.log_scales.extend([spacing.ln(); 3]);
                 cloud.rotations.extend([1.0, 0.0, 0.0, 0.0]);
                 cloud.opacity_logits.push(opacity_logit);
-                cloud
-                    .sh_dc
-                    .extend((0..3).map(|c| rgb_to_sh_dc(view.rgb[i * 3 + c])));
+                cloud.sh_dc.extend((0..3).map(|c| rgb_to_sh_dc(view.rgb[i * 3 + c])));
             }
         }
     }

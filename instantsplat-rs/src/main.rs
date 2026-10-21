@@ -167,18 +167,25 @@ fn main() -> Result<()> {
             cpu: args.cpu,
             log_every: args.log_every,
             align_views: !args.unaligned,
-            camera_poses: if args.no_pose_refinement { CameraPoses::Fixed } else { CameraPoses::Refined },
+            camera_poses: if args.no_pose_refinement {
+                CameraPoses::Fixed
+            } else {
+                CameraPoses::Refined
+            },
             learning_rates: LearningRates {
                 camera_rotation: args.camera_rotation_lr.unwrap_or(LEARNING_RATES_3DGS.camera_rotation),
                 camera_translation: args.camera_translation_lr.unwrap_or(LEARNING_RATES_3DGS.camera_translation),
                 camera_focal: args.camera_focal_lr.unwrap_or(LEARNING_RATES_3DGS.camera_focal),
                 ..LEARNING_RATES_3DGS
             },
-            evaluation: args.evaluate_colmap.zip(args.evaluate_frames).map(|(colmap, frames)| EvaluationSettings {
-                colmap,
-                frames,
-                hold_out_every: args.hold_out_every,
-            }),
+            evaluation: args
+                .evaluate_colmap
+                .zip(args.evaluate_frames)
+                .map(|(colmap, frames)| EvaluationSettings {
+                    colmap,
+                    frames,
+                    hold_out_every: args.hold_out_every,
+                }),
         }),
         Command::Refine(args) => run_refine(&RefineSettings {
             run: args.run,

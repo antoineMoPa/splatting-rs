@@ -32,10 +32,11 @@ pub fn align_colmap_to_cameras(
     let pairs: Vec<CameraPair> = cameras
         .iter()
         .filter_map(|(name, to)| {
-            colmap
-                .iter()
-                .find(|image| &image.name == name)
-                .map(|image| CameraPair { name, from: &image.camera, to })
+            colmap.iter().find(|image| &image.name == name).map(|image| CameraPair {
+                name,
+                from: &image.camera,
+                to,
+            })
         })
         .collect();
     println!(
@@ -88,7 +89,10 @@ fn median(mut values: Vec<f64>) -> f64 {
 /// The COLMAP images without the stray ones; each dropped image is printed.
 pub fn without_stray_cameras(colmap: &[ColmapImage]) -> Vec<ColmapImage> {
     let median_center = Vector3::from_fn(|axis, _| median(colmap.iter().map(|image| image.camera.translation[axis]).collect()));
-    let distances: Vec<f64> = colmap.iter().map(|image| (image.camera.translation - median_center).norm()).collect();
+    let distances: Vec<f64> = colmap
+        .iter()
+        .map(|image| (image.camera.translation - median_center).norm())
+        .collect();
     let limit = MAX_CENTER_DISTANCE_OVER_MEDIAN * median(distances.clone());
     let kept: Vec<ColmapImage> = colmap
         .iter()
@@ -105,7 +109,11 @@ pub fn without_stray_cameras(colmap: &[ColmapImage]) -> Vec<ColmapImage> {
         })
         .map(|(image, _)| image.clone())
         .collect();
-    assert!(kept.len() >= 3, "only {} COLMAP cameras left after dropping the stray ones", kept.len());
+    assert!(
+        kept.len() >= 3,
+        "only {} COLMAP cameras left after dropping the stray ones",
+        kept.len()
+    );
     kept
 }
 
@@ -125,9 +133,19 @@ pub fn posed_frames(colmap: &[ColmapImage], frames: &Path, similarity: &Similari
             missing.push(image.name.as_str());
         }
     }
-    assert!(!posed.is_empty(), "none of the {} COLMAP images is in {}", colmap.len(), frames.display());
+    assert!(
+        !posed.is_empty(),
+        "none of the {} COLMAP images is in {}",
+        colmap.len(),
+        frames.display()
+    );
     if !missing.is_empty() {
-        println!("{} COLMAP images have no photo in {}: {}", missing.len(), frames.display(), missing.join(" "));
+        println!(
+            "{} COLMAP images have no photo in {}: {}",
+            missing.len(),
+            frames.display(),
+            missing.join(" ")
+        );
     }
     posed
 }

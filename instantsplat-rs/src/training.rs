@@ -100,67 +100,36 @@ pub struct Trainer<'a> {
     initial_gaussian_count: usize,
     densifications: Vec<DensifyReport>,
     extent: f32,
+    learning_rates: LearningRates,
     started: Instant,
-    /// Of the last `log_step_async`.
+    /// Of the last `read_step_async`.
     last_loss: LossTerms,
     last_intersections: u32,
 }
 
 impl<'a> Trainer<'a> {
-    pub fn new(
-        gpu: &'a Gpu,
-        cloud: &GaussianCloud,
-        views: &[DenseView],
-        learning_rates: LearningRates,
-        camera_poses: CameraPoses,
-    ) -> Self {
+    pub fn new(gpu: &'a Gpu, cloud: &GaussianCloud, views: &[DenseView], learning_rates: LearningRates, camera_poses: CameraPoses) -> Self {
         assert!(!views.is_empty(), "no views");
         let (width, height) = (views[0].width, views[0].height);
         for view in views {
             view.check();
-            assert_eq!(
-                (view.width, view.height),
-                (width, height),
-                "every view must have the same size"
-            );
+            assert_eq!((view.width, view.height), (width, height), "every view must have the same size");
         }
         let ground_truth: Vec<f32> = views.iter().flat_map(ground_truth_rgba).collect();
         let ground_truth = gpu.storage_buffer_from("ground truth", &ground_truth);
         let params = gpu.storage_buffer_from("params", &cloud.to_packed());
-        let rasterizer = Rasterizer::new(
-            gpu,
-            &params,
-            cloud.len(),
-            width as u32,
-            height as u32,
-            &ground_truth,
-            views.len(),
-        );
+        let rasterizer = Rasterizer::new(gpu, &params, cloud.len(), width as u32, height as u32, &ground_truth, views.len());
         let cameras: Vec<_> = views.iter().map(|view| view.camera.clone()).collect();
         let extent = cameras_extent(&cameras) as f32;
-        assert!(extent > 0.0, "camera extent {extent}: the views' cameras are all at the same position");
-        println!("camera extent {extent:.3}: position learning rate {:.2e}", learning_rates.position * extent);
+        assert!(
+            extent > 0.0,
+            "camera extent {extent}: the views' cameras are all at the same position"
+        );
         let poses = match camera_poses {
             CameraPoses::Fixed => None,
-            CameraPoses::Refined => {
-                println!(
-                    "refining the poses of {} views (view {FIXED_VIEW} fixed): rotation rate {:.1e}, translation rate {:.2e}, focal rate {:.1e}",
-                    views.len(),
-                    learning_rates.camera_rotation,
-                    learning_rates.camera_translation * extent,
-                    learning_rates.camera_focal
-                );
-                Some(PoseRefinement::new(&cameras, &learning_rates, extent))
-            }
+            CameraPoses::Refined => Some(PoseRefinement::new(&cameras, &learning_rates, extent)),
         };
-        let adam = Adam::new(
-            gpu,
-            &params,
-            rasterizer.param_gradients(),
-            cloud.len(),
-            learning_rates,
-            extent,
-        );
+        let adam = Adam::new(gpu, &params, rasterizer.param_gradients(), cloud.len(), learning_rates, extent);
         Self {
             gpu,
             initial_cameras: cameras,
@@ -174,6 +143,7 @@ impl<'a> Trainer<'a> {
             initial_gaussian_count: cloud.len(),
             densifications: Vec::new(),
             extent,
+            learning_rates,
             started: Instant::now(),
             last_loss: LossTerms::default(),
             last_intersections: 0,
@@ -246,7 +216,7 @@ impl<'a> Trainer<'a> {
     /// Step `step` (0-based) of a run of `steps`: the densification due after the previous
     /// step if any, then the step, views cycled in order, the position rate decayed
     /// (`position_rate_factor`). Densifying before the step leaves the step's loss and
-    /// intersections in the rasterizer for `log_step_async`. The densification's report
+    /// intersections in the rasterizer for `read_step_async`. The densification's report
     /// when there was one: `params` is then a new buffer.
     pub async fn train_step_async(&mut self, step: usize, steps: usize) -> Option<DensifyReport> {
         let due = self.densify.filter(|settings| step > 0 && settings.densifies_after(step, steps));
@@ -266,8 +236,10 @@ impl<'a> Trainer<'a> {
     /// Reads the Gaussians, Adam's moments and the densification statistics back,
     /// densifies, and rebuilds the buffers at the new count (the statistics start over).
     async fn densify_async(&mut self, settings: &DensifySettings) -> DensifyReport {
-        let started = Instant::now();
-        let params = self.gpu.read_back_async::<f32>(&self.params, self.gaussian_count * PARAM_STRIDE).await;
+        let params = self
+            .gpu
+            .read_back_async::<f32>(&self.params, self.gaussian_count * PARAM_STRIDE)
+            .await;
         let moments = self.adam.read_moments_async(self.gpu).await;
         let stats = self.rasterizer.read_densify_stats_async(self.gpu).await;
         let max_count = (self.initial_gaussian_count as f32 * settings.max_growth) as usize;
@@ -285,28 +257,52 @@ impl<'a> Trainer<'a> {
             &self.ground_truth,
             self.view_count(),
         );
-        self.adam = self.adam.resumed(self.gpu, &self.params, self.rasterizer.param_gradients(), count, &densified.moments);
+        self.adam = self
+            .adam
+            .resumed(self.gpu, &self.params, self.rasterizer.param_gradients(), count, &densified.moments);
         self.gaussian_count = count;
-        println!("densified after step {}: {} in {:.1?}", self.adam.steps_taken(), densified.report, started.elapsed());
         self.densifications.push(densified.report);
         densified.report
     }
 
-    /// After step `step` (0-based) of `view`, its loss and intersection list still in the
-    /// buffers: reads them back, prints them with the pose gradient, keeps them for the
-    /// report, and returns the loss. `optimize_async` calls it every `log_every` steps.
-    pub async fn log_step_async(&mut self, step: usize, view: usize) -> LossTerms {
+    /// After a step, its loss and intersection list still in the buffers: reads them back,
+    /// keeps them for the report, and returns the loss.
+    pub async fn read_step_async(&mut self) -> LossTerms {
         self.last_intersections = self.rasterizer.read_intersections_async(self.gpu).await.count;
         self.last_loss = self.rasterizer.read_loss_async(self.gpu).await;
+        self.last_loss
+    }
+
+    /// The camera extent and the learning rates that depend on it.
+    fn print_settings(&self) {
+        let rates = &self.learning_rates;
         println!(
-            "step {:>5} view {view}: {}, {} gaussian-tile pairs, {:.1?}",
+            "camera extent {:.3}: position learning rate {:.2e}",
+            self.extent,
+            rates.position * self.extent
+        );
+        if self.poses.is_some() {
+            println!(
+                "refining the poses of {} views (view {FIXED_VIEW} fixed): rotation rate {:.1e}, translation rate {:.2e}, focal rate {:.1e}",
+                self.view_count(),
+                rates.camera_rotation,
+                rates.camera_translation * self.extent,
+                rates.camera_focal
+            );
+        }
+    }
+
+    /// After step `step` (0-based) of `view`: `read_step_async`, printed with the pose
+    /// gradient.
+    async fn print_step_async(&mut self, step: usize, view: usize) {
+        let loss = self.read_step_async().await;
+        println!(
+            "step {:>5} view {view}: {loss}, {} gaussian-tile pairs, {:.1?}",
             step + 1,
-            self.last_loss,
             self.last_intersections,
             self.started.elapsed()
         );
         self.print_pose_step_async(view).await;
-        self.last_loss
     }
 
     /// After a logged step of `view`: the view's pose gradient against the Gaussians'
@@ -412,7 +408,12 @@ impl<'a> Trainer<'a> {
     }
 
     pub async fn cloud_async(&self) -> GaussianCloud {
-        GaussianCloud::from_packed(&self.gpu.read_back_async::<f32>(&self.params, self.gaussian_count * PARAM_STRIDE).await)
+        GaussianCloud::from_packed(
+            &self
+                .gpu
+                .read_back_async::<f32>(&self.params, self.gaussian_count * PARAM_STRIDE)
+                .await,
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -420,18 +421,25 @@ impl<'a> Trainer<'a> {
         pollster::block_on(self.cloud_async())
     }
 
-    /// `settings.steps` steps cycling the views, logged every `settings.log_every`, then
-    /// `finish_async`.
+    /// `settings.steps` steps cycling the views, printed every `settings.log_every`, then
+    /// `finish_async`, its report printed.
     pub async fn optimize_async(mut self, settings: &TrainSettings) -> TrainReport {
         assert!(settings.log_every > 0, "log_every");
+        self.print_settings();
         for step in 0..settings.steps {
-            self.train_step_async(step, settings.steps).await;
+            if let Some(densified) = self.train_step_async(step, settings.steps).await {
+                println!("densified after step {step}: {densified}");
+            }
             if (step + 1) % settings.log_every == 0 || step + 1 == settings.steps {
-                self.log_step_async(step, step % self.view_count()).await;
+                self.print_step_async(step, step % self.view_count()).await;
             }
         }
         assert_eq!(self.adam.steps_taken() as usize, settings.steps);
-        self.finish_async().await
+        self.print_pose_corrections();
+        let report = self.finish_async().await;
+        println!("mean over the {} views: {}", report.cameras.len(), report.final_loss);
+        println!("pruned: {}", report.prune);
+        report
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -439,16 +447,12 @@ impl<'a> Trainer<'a> {
         pollster::block_on(self.optimize_async(settings))
     }
 
-    /// After the steps: the loss over every view, the pose corrections printed, the
-    /// Gaussians read back and pruned.
+    /// After the steps: the loss over every view, the Gaussians read back and pruned.
     pub async fn finish_async(self) -> TrainReport {
         assert!(self.adam.steps_taken() > 0, "no step taken");
         let final_loss = self.loss_over_views_async().await;
-        println!("mean over the {} views: {final_loss}", self.view_count());
-        self.print_pose_corrections();
         let trained = self.cloud_async().await;
         let (cloud, prune_report) = prune(&trained, self.extent);
-        println!("pruned: {prune_report}");
         TrainReport {
             cloud,
             cameras: self.cameras(),
@@ -468,8 +472,8 @@ impl<'a> Trainer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
     use crate::densify::DENSIFY_SHORT_RUN;
+    use crate::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
     use crate::optimizer::LEARNING_RATES_3DGS;
     use nalgebra::{Matrix3, Vector3};
 
@@ -538,7 +542,12 @@ mod tests {
         assert!(after.dssim < before.dssim, "D-SSIM {} -> {}", before.dssim, after.dssim);
         assert_eq!(report.gaussians_before_pruning, cloud.len());
         assert_eq!(report.prune.dropped_oversized, 0, "the clamp keeps every scale under the cap");
-        assert!(report.cloud.len() > cloud.len() / 2, "pruned to {} of {}", report.cloud.len(), cloud.len());
+        assert!(
+            report.cloud.len() > cloud.len() / 2,
+            "pruned to {} of {}",
+            report.cloud.len(),
+            cloud.len()
+        );
         assert_eq!(report.cameras[1].translation, views[1].camera.translation, "fixed poses stay");
         assert_eq!(report.focal_scale, 1.0);
     }
@@ -584,6 +593,11 @@ mod tests {
         assert_eq!(densification.before, cloud.len());
         assert!(densification.cloned + densification.split > 0, "nothing densified: {densification}");
         assert_eq!(report.gaussians_before_pruning, densification.after);
-        assert!(report.final_loss.total < 0.5 * before.total, "total {} -> {}", before.total, report.final_loss.total);
+        assert!(
+            report.final_loss.total < 0.5 * before.total,
+            "total {} -> {}",
+            before.total,
+            report.final_loss.total
+        );
     }
 }

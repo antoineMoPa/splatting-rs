@@ -84,7 +84,11 @@ impl DensifySettings {
     /// Whether the densification after `done` steps also resets the opacities.
     pub fn resets_opacity_after(&self, done: usize) -> bool {
         self.opacity_reset_interval.is_some_and(|interval| {
-            assert!(interval > 0 && interval % self.interval == 0, "opacity reset interval {interval}: a multiple of the densify interval {}", self.interval);
+            assert!(
+                interval > 0 && interval % self.interval == 0,
+                "opacity reset interval {interval}: a multiple of the densify interval {}",
+                self.interval
+            );
             done % interval == 0
         })
     }
@@ -176,7 +180,11 @@ pub fn densify(
         .collect();
     let mean_gradient = |g: usize| {
         let stat = stats[g];
-        if stat.visible_count > 0.0 { stat.mean_gradient_sum / stat.visible_count } else { 0.0 }
+        if stat.visible_count > 0.0 {
+            stat.mean_gradient_sum / stat.visible_count
+        } else {
+            0.0
+        }
     };
     let mut candidates: Vec<usize> = (0..count)
         .filter(|&g| fates[g] == Fate::Kept && mean_gradient(g) > settings.gradient_threshold)
@@ -186,7 +194,10 @@ pub fn densify(
     let kept = fates.iter().filter(|&&fate| fate == Fate::Kept).count();
     let budget = max_count.saturating_sub(kept).min(candidates.len());
     for &g in &candidates[..budget] {
-        let largest = params[g * PARAM_STRIDE + 3..g * PARAM_STRIDE + 6].iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let largest = params[g * PARAM_STRIDE + 3..g * PARAM_STRIDE + 6]
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
         fates[g] = if largest > split_log_scale { Fate::Split } else { Fate::Cloned };
     }
 
@@ -345,7 +356,10 @@ mod tests {
         assert_eq!(gaussian(0), &params[0..PARAM_STRIDE]);
         assert_eq!(gaussian(1)[0], 4.0);
         assert_eq!(gaussian(2)[0], 5.0);
-        assert_eq!(&out.moments.first[PARAM_STRIDE..2 * PARAM_STRIDE], &moments.first[4 * PARAM_STRIDE..5 * PARAM_STRIDE]);
+        assert_eq!(
+            &out.moments.first[PARAM_STRIDE..2 * PARAM_STRIDE],
+            &moments.first[4 * PARAM_STRIDE..5 * PARAM_STRIDE]
+        );
         assert_eq!(&out.moments.second[0..PARAM_STRIDE], &moments.second[0..PARAM_STRIDE]);
         assert_eq!(gaussian(3), &params[0..PARAM_STRIDE]);
         assert!(out.moments.first[3 * PARAM_STRIDE..].iter().all(|&m| m == 0.0));
@@ -353,7 +367,11 @@ mod tests {
         for child in [gaussian(4), gaussian(5)] {
             let original = &params[PARAM_STRIDE..2 * PARAM_STRIDE];
             for k in 3..6 {
-                assert!((child[k] - (original[k] - 1.6f32.ln())).abs() < 1e-6, "child log scale {}", child[k]);
+                assert!(
+                    (child[k] - (original[k] - 1.6f32.ln())).abs() < 1e-6,
+                    "child log scale {}",
+                    child[k]
+                );
             }
             assert_eq!(&child[6..], &original[6..]);
             // Within 4 sigma (e^-1 along x) of the original center.
@@ -368,7 +386,10 @@ mod tests {
         let (params, moments, stats) = six_gaussians();
         // 4 kept after pruning; one more allowed: Gaussian 0 (3e-3 / 4) beats 1 (2e-3 / 4).
         let out = densify(&params, &moments, &stats, 10.0, 5, &DENSIFY_SHORT_RUN, false, 1);
-        assert_eq!((out.report.cloned, out.report.split, out.report.over_budget, out.report.after), (1, 0, 1, 5));
+        assert_eq!(
+            (out.report.cloned, out.report.split, out.report.over_budget, out.report.after),
+            (1, 0, 1, 5)
+        );
     }
 
     #[test]
@@ -393,7 +414,11 @@ mod tests {
         assert!(out.report.opacity_reset);
         for g in 0..out.report.after {
             let slot = g * PARAM_STRIDE + 10;
-            assert!((sigmoid(out.params[slot]) - RESET_OPACITY).abs() < 1e-6, "opacity {}", sigmoid(out.params[slot]));
+            assert!(
+                (sigmoid(out.params[slot]) - RESET_OPACITY).abs() < 1e-6,
+                "opacity {}",
+                sigmoid(out.params[slot])
+            );
             assert_eq!((out.moments.first[slot], out.moments.second[slot]), (0.0, 0.0));
         }
         // Other moments are kept.

@@ -45,9 +45,7 @@ impl Gpu {
         // WebGPU's baseline limits, except that buffers may be as large as the adapter allows.
         let required_limits = wgpu::Limits {
             max_buffer_size: adapter_limits.max_buffer_size.min(MAX_BUFFER_BYTES),
-            max_storage_buffer_binding_size: adapter_limits
-                .max_storage_buffer_binding_size
-                .min(MAX_BUFFER_BYTES),
+            max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size.min(MAX_BUFFER_BYTES),
             ..wgpu::Limits::defaults()
         };
         let (device, queue) = adapter
@@ -73,32 +71,26 @@ impl Gpu {
         self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         })
     }
 
     pub fn storage_buffer_from<T: Pod>(&self, label: &str, data: &[T]) -> wgpu::Buffer {
         assert!(!data.is_empty(), "{label}: empty buffer");
-        self.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            })
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: bytemuck::cast_slice(data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+        })
     }
 
     pub fn uniform_buffer<T: Pod>(&self, label: &str, value: &T) -> wgpu::Buffer {
-        self.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::bytes_of(value),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            })
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: bytemuck::bytes_of(value),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
     }
 
     /// Dispatch arguments written by kernels: `u32` triples.
@@ -106,16 +98,13 @@ impl Gpu {
         self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: (triples * 3 * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::INDIRECT
-                | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
     }
 
     pub fn write<T: Pod>(&self, buffer: &wgpu::Buffer, data: &[T]) {
-        self.queue
-            .write_buffer(buffer, 0, bytemuck::cast_slice(data));
+        self.queue.write_buffer(buffer, 0, bytemuck::cast_slice(data));
     }
 
     /// Compiles `wgsl` and builds the pipeline of its entry point `entry` (bind group layout
@@ -130,25 +119,23 @@ impl Gpu {
         } else {
             // SAFETY: the kernels are ours and index within the buffers they are given; the
             // tests and debug builds run them with the checks (`SHADER_RUNTIME_CHECKS`).
-            unsafe { self.device.create_shader_module_trusted(descriptor, wgpu::ShaderRuntimeChecks::unchecked()) }
+            unsafe {
+                self.device
+                    .create_shader_module_trusted(descriptor, wgpu::ShaderRuntimeChecks::unchecked())
+            }
         };
-        self.device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: None,
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
+        self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(label),
+            layout: None,
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        })
     }
 
     /// Bind group 0 of `pipeline`, `buffers` in binding order.
-    pub fn bind_group(
-        &self,
-        pipeline: &wgpu::ComputePipeline,
-        buffers: &[&wgpu::Buffer],
-    ) -> wgpu::BindGroup {
+    pub fn bind_group(&self, pipeline: &wgpu::ComputePipeline, buffers: &[&wgpu::Buffer]) -> wgpu::BindGroup {
         let entries: Vec<wgpu::BindGroupEntry> = buffers
             .iter()
             .enumerate()
@@ -165,8 +152,7 @@ impl Gpu {
     }
 
     pub fn encoder(&self) -> wgpu::CommandEncoder {
-        self.device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
+        self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
     }
 
     pub fn submit(&self, encoder: wgpu::CommandEncoder) {
@@ -193,14 +179,10 @@ impl Gpu {
         self.submit(encoder);
         let mapped = MapReady::default();
         let callback = mapped.clone();
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| callback.set(result));
+        staging.slice(..).map_async(wgpu::MapMode::Read, move |result| callback.set(result));
         // Natively this returns once the GPU is done and the map callback has run; in a
         // browser the device is polled by the page's event loop and this returns at once.
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("waiting for the GPU");
+        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("waiting for the GPU");
         mapped.await.expect("mapping the read back buffer");
         let data = bytemuck::cast_slice(&staging.slice(..).get_mapped_range().expect("mapped")).to_vec();
         staging.unmap();
@@ -253,12 +235,7 @@ pub fn workgroups(count: usize, workgroup_size: u32) -> u32 {
 }
 
 /// Runs one compute pass of `pipeline` with `bind_group`.
-pub fn dispatch(
-    encoder: &mut wgpu::CommandEncoder,
-    pipeline: &wgpu::ComputePipeline,
-    bind_group: &wgpu::BindGroup,
-    groups: u32,
-) {
+pub fn dispatch(encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline, bind_group: &wgpu::BindGroup, groups: u32) {
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);

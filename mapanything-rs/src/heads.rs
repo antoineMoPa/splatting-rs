@@ -112,9 +112,7 @@ impl ScaleHead {
         Ok(Self {
             projection: candle_nn::linear(DIM, SCALE_DIM, vb.pp("proj"))?,
             hidden: (0..SCALE_HIDDEN_LAYERS)
-                .map(|layer| {
-                    candle_nn::linear(SCALE_DIM, SCALE_DIM, vb.pp(format!("mlp.{layer}.0")))
-                })
+                .map(|layer| candle_nn::linear(SCALE_DIM, SCALE_DIM, vb.pp(format!("mlp.{layer}.0"))))
                 .collect::<Result<_>>()?,
             output: candle_nn::linear(SCALE_DIM, 1, vb.pp("output_proj"))?,
         })
@@ -127,10 +125,6 @@ impl ScaleHead {
         for layer in &self.hidden {
             xs = layer.forward(&xs)?.relu()?;
         }
-        self.output
-            .forward(&xs)?
-            .exp()?
-            .clamp(MIN_SCALE, f64::INFINITY)?
-            .flatten_all()
+        self.output.forward(&xs)?.exp()?.clamp(MIN_SCALE, f64::INFINITY)?.flatten_all()
     }
 }

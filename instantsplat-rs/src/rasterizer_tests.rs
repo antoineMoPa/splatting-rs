@@ -49,15 +49,7 @@ impl Scene {
             "ground truth",
             (camera.width * camera.height) as u64 * GROUND_TRUTH_STRIDE as u64 * 4,
         );
-        let rasterizer = Rasterizer::new(
-            &gpu,
-            &params,
-            cloud.len(),
-            camera.width,
-            camera.height,
-            &ground_truth,
-            1,
-        );
+        let rasterizer = Rasterizer::new(&gpu, &params, cloud.len(), camera.width, camera.height, &ground_truth, 1);
         Self {
             gpu,
             params,
@@ -100,16 +92,35 @@ fn renders_a_known_gaussian() {
     let rendered = scene.render();
     assert_rgb_close(rendered.premultiplied(16, 16), premultiply(0.8, [1.0, 0.0, 0.0]), 1e-3, "center");
     let alpha_2px = 0.8 * (-0.5 * 4.0 / 4.3f32).exp();
-    assert_rgb_close(rendered.premultiplied(18, 16), premultiply(alpha_2px, [1.0, 0.0, 0.0]), 1e-3, "2 px right");
-    assert!((rendered.alpha(18, 16) - alpha_2px).abs() < 1e-3, "alpha 2 px right {}", rendered.alpha(18, 16));
-    assert_rgb_close(rendered.premultiplied(16, 13), premultiply(0.8 * (-0.5 * 9.0 / 4.3f32).exp(), [1.0, 0.0, 0.0]), 1e-3, "3 px up");
+    assert_rgb_close(
+        rendered.premultiplied(18, 16),
+        premultiply(alpha_2px, [1.0, 0.0, 0.0]),
+        1e-3,
+        "2 px right",
+    );
+    assert!(
+        (rendered.alpha(18, 16) - alpha_2px).abs() < 1e-3,
+        "alpha 2 px right {}",
+        rendered.alpha(18, 16)
+    );
+    assert_rgb_close(
+        rendered.premultiplied(16, 13),
+        premultiply(0.8 * (-0.5 * 9.0 / 4.3f32).exp(), [1.0, 0.0, 0.0]),
+        1e-3,
+        "3 px up",
+    );
     assert_rgb_close(rendered.premultiplied(0, 0), [0.0; 3], 0.0, "corner");
     assert_rgb_close(rendered.over_background(0, 0), BACKGROUND, 0.0, "corner over the background");
     assert_rgb_close(rendered.premultiplied(31, 31), [0.0; 3], 0.0, "opposite corner");
     let transmittance = rendered.transmittance(16, 16);
     assert!((transmittance - 0.2).abs() < 1e-3, "transmittance {transmittance}");
     let over = rendered.over_background(16, 16);
-    assert_rgb_close(over, [0.8 + 0.2 * BACKGROUND[0], 0.2 * BACKGROUND[1], 0.2 * BACKGROUND[2]], 1e-3, "center over the background");
+    assert_rgb_close(
+        over,
+        [0.8 + 0.2 * BACKGROUND[0], 0.2 * BACKGROUND[1], 0.2 * BACKGROUND[2]],
+        1e-3,
+        "center over the background",
+    );
     let rgba = rendered.to_rgba8();
     assert_eq!(rgba.get_pixel(16, 16).0, [255, 0, 0, 204]);
     assert_eq!(rgba.get_pixel(0, 0).0, [0, 0, 0, 0]);
@@ -161,14 +172,7 @@ pub(crate) fn reference_project(cloud: &GaussianCloud, camera: &PinholeCamera) -
             let limit_y = 1.3 * camera.height as f64 / (2.0 * fy);
             let tx = (p.x / p.z).clamp(-limit_x, limit_x) * p.z;
             let ty = (p.y / p.z).clamp(-limit_y, limit_y) * p.z;
-            let j = nalgebra::Matrix2x3::new(
-                fx / p.z,
-                0.0,
-                -fx * tx / (p.z * p.z),
-                0.0,
-                fy / p.z,
-                -fy * ty / (p.z * p.z),
-            );
+            let j = nalgebra::Matrix2x3::new(fx / p.z, 0.0, -fx * tx / (p.z * p.z), 0.0, fy / p.z, -fy * ty / (p.z * p.z));
             let tm = j * w;
             let cov = tm * sigma * tm.transpose();
             let a = cov[(0, 0)] + 0.3;
@@ -208,10 +212,7 @@ fn reference_render(cloud: &GaussianCloud, camera: &PinholeCamera) -> Vec<f32> {
             let mut transmittance = 1.0f32;
             let mut color = [0.0f32; 3];
             for g in &gaussians {
-                let in_tiles = tile_x >= g.tile_min[0]
-                    && tile_x < g.tile_max[0]
-                    && tile_y >= g.tile_min[1]
-                    && tile_y < g.tile_max[1];
+                let in_tiles = tile_x >= g.tile_min[0] && tile_x < g.tile_max[0] && tile_y >= g.tile_min[1] && tile_y < g.tile_max[1];
                 if !in_tiles {
                     continue;
                 }
@@ -255,11 +256,9 @@ pub(crate) fn random_cloud(count: usize, rng: &mut StdRng) -> GaussianCloud {
     };
     for depth in depths {
         let spread = 0.4 * depth;
-        cloud.positions.extend([
-            rng.random_range(-spread..spread),
-            rng.random_range(-spread..spread),
-            depth,
-        ]);
+        cloud
+            .positions
+            .extend([rng.random_range(-spread..spread), rng.random_range(-spread..spread), depth]);
         cloud.log_scales.extend((0..3).map(|_| rng.random_range(-3.5f32..-1.5)));
         cloud.rotations.extend((0..4).map(|_| rng.random_range(-1.0f32..1.0)));
         cloud.opacity_logits.push(rng.random_range(-2.0f32..3.0));
@@ -306,11 +305,7 @@ fn gradient_check(camera: PinholeCamera) {
     };
     // Gaussians in front of the camera, along its optical axis.
     for g in 0..4 {
-        let in_camera = Vector3::new(
-            rng.random_range(-0.3f64..0.3),
-            rng.random_range(-0.3f64..0.3),
-            3.0 + g as f64 * 0.5,
-        );
+        let in_camera = Vector3::new(rng.random_range(-0.3f64..0.3), rng.random_range(-0.3f64..0.3), 3.0 + g as f64 * 0.5);
         let in_world = camera.rotation * in_camera + camera.translation;
         cloud.positions.extend([in_world.x as f32, in_world.y as f32, in_world.z as f32]);
         cloud.log_scales.extend((0..3).map(|_| rng.random_range(-2.5f32..-1.0)));
@@ -320,9 +315,7 @@ fn gradient_check(camera: PinholeCamera) {
     }
     let scene = Scene::new(&cloud, camera.clone());
     let pixel_count = (camera.width * camera.height) as usize;
-    let weights: Vec<f32> = (0..pixel_count * 4)
-        .map(|_| rng.random_range(-1.0f32..1.0))
-        .collect();
+    let weights: Vec<f32> = (0..pixel_count * 4).map(|_| rng.random_range(-1.0f32..1.0)).collect();
     let packed = cloud.to_packed();
     let base_render = scene.render();
     assert!(base_render.rgbt.chunks(4).any(|p| p[3] < 0.5), "scene too transparent");
@@ -378,7 +371,10 @@ fn gradient_check(camera: PinholeCamera) {
             failures.push(format!("{name}: analytic {a:.5} vs finite difference {numeric:.5}"));
         }
     }
-    assert!(nonzero > 40, "only {nonzero} non-zero gradients: the scene does not exercise the backward pass");
+    assert!(
+        nonzero > 40,
+        "only {nonzero} non-zero gradients: the scene does not exercise the backward pass"
+    );
     assert!(failures.is_empty(), "gradient mismatches:\n{}", failures.join("\n"));
 }
 

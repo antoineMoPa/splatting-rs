@@ -15,10 +15,10 @@ use instantsplat_rs::camera::PinholeCamera;
 use instantsplat_rs::camera_pose::pose_distance;
 use instantsplat_rs::cameras_json::parse_cameras_json;
 use instantsplat_rs::dense_view::DenseView;
+use instantsplat_rs::densify::DENSIFY_SHORT_RUN;
 use instantsplat_rs::gaussians::GaussianCloud;
 use instantsplat_rs::gpu::Gpu;
 use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
-use instantsplat_rs::densify::DENSIFY_SHORT_RUN;
 use instantsplat_rs::optimizer::LEARNING_RATES_SHORT_RUN;
 use instantsplat_rs::rasterizer::{Rasterizer, Rendered};
 use instantsplat_rs::splat_ply::{parse_splat_ply, write_splat_ply_to};
@@ -81,7 +81,9 @@ fn gpu() -> &'static Gpu {
 }
 
 fn take_scene() -> Scene {
-    SCENE.with(|scene| scene.borrow_mut().take()).expect("no scene: none loaded, or a GPU job is still running")
+    SCENE
+        .with(|scene| scene.borrow_mut().take())
+        .expect("no scene: none loaded, or a GPU job is still running")
 }
 
 fn put_scene(scene: Scene) {
@@ -126,7 +128,11 @@ pub fn load_scene(ply: &[u8], cameras_json: &str) -> Result<usize, JsError> {
     assert!(!cameras.is_empty(), "cameras.json has no camera");
     let (width, height) = (cameras[0].1.width, cameras[0].1.height);
     for (name, camera) in &cameras {
-        assert_eq!((camera.width, camera.height), (width, height), "{name}: every camera must have the same image size");
+        assert_eq!(
+            (camera.width, camera.height),
+            (width, height),
+            "{name}: every camera must have the same image size"
+        );
     }
     let renderer = splat_renderer(&cloud, preview_size(&cameras[0].1));
     let count = cloud.len();
@@ -145,7 +151,13 @@ pub fn load_scene(ply: &[u8], cameras_json: &str) -> Result<usize, JsError> {
 pub fn camera_names() -> Vec<String> {
     SCENE.with(|scene| {
         let scene = scene.borrow();
-        scene.as_ref().expect("no scene").cameras.iter().map(|(name, _)| name.clone()).collect()
+        scene
+            .as_ref()
+            .expect("no scene")
+            .cameras
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect()
     })
 }
 
@@ -243,7 +255,13 @@ pub fn start_training(steps: usize, refine_poses: bool) {
 pub async fn train_steps(count: usize) -> String {
     let mut scene = take_scene();
     let preview_size = preview_size(&scene.cameras[0].1);
-    let Renderer::Training { trainer, preview, steps, step } = &mut scene.renderer else {
+    let Renderer::Training {
+        trainer,
+        preview,
+        steps,
+        step,
+    } = &mut scene.renderer
+    else {
         panic!("not training: start_training first");
     };
     assert!(count > 0, "count");
@@ -255,7 +273,7 @@ pub async fn train_steps(count: usize) -> String {
         }
         *step += 1;
     }
-    let loss = trainer.log_step_async(*step - 1, (*step - 1) % trainer.view_count()).await;
+    let loss = trainer.read_step_async().await;
     let status = format!("step {}/{}: {loss}, {} Gaussians", *step, *steps, trainer.gaussian_count());
     put_scene(scene);
     status

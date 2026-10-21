@@ -73,9 +73,7 @@ pub fn parse_cameras_json(text: &str, label: &str) -> Result<Vec<(String, Pinhol
                     .get(key)
                     .with_context(|| format!("{label}: a camera has no \"{key}\" (written by an older version?)"))
             };
-            let number = |key: &str| -> Result<f64> {
-                field(key)?.as_f64().with_context(|| format!("{label}: \"{key}\" is not a number"))
-            };
+            let number = |key: &str| -> Result<f64> { field(key)?.as_f64().with_context(|| format!("{label}: \"{key}\" is not a number")) };
             let numbers = |value: &Value, count: usize| -> Result<Vec<f64>> {
                 let values: Vec<f64> = value
                     .as_array()

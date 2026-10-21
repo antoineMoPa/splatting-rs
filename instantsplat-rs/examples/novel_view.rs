@@ -41,7 +41,13 @@ fn main() -> Result<()> {
     let cloud = read_splat_ply(&args.splat)?;
     let cameras_path = args.splat.parent().expect("splat path has a parent").join(CAMERAS_FILE);
     let cameras = read_cameras_json(&cameras_path)?;
-    ensure!(args.view < cameras.len(), "{}: {} cameras, no view {}", cameras_path.display(), cameras.len(), args.view);
+    ensure!(
+        args.view < cameras.len(),
+        "{}: {} cameras, no view {}",
+        cameras_path.display(),
+        cameras.len(),
+        args.view
+    );
     let (name, camera) = &cameras[args.view];
     let count = cloud.len();
     let centroid = cloud.centroid();
@@ -49,25 +55,29 @@ fn main() -> Result<()> {
     let novel = Turntable::from_cameras(&all, centroid).view(camera, args.yaw_degrees.to_radians(), args.pitch_degrees.to_radians());
     println!(
         "{count} Gaussians, centroid ({:.3}, {:.3}, {:.3}); view {} ({name}) at ({:.3}, {:.3}, {:.3}) orbited {} deg yaw, {} deg pitch to ({:.3}, {:.3}, {:.3})",
-        centroid.x, centroid.y, centroid.z, args.view,
-        camera.translation.x, camera.translation.y, camera.translation.z,
-        args.yaw_degrees, args.pitch_degrees,
-        novel.translation.x, novel.translation.y, novel.translation.z
+        centroid.x,
+        centroid.y,
+        centroid.z,
+        args.view,
+        camera.translation.x,
+        camera.translation.y,
+        camera.translation.z,
+        args.yaw_degrees,
+        args.pitch_degrees,
+        novel.translation.x,
+        novel.translation.y,
+        novel.translation.z
     );
 
     let gpu = Gpu::request();
     let params = gpu.storage_buffer_from("params", &cloud.to_packed());
-    let ground_truth = gpu.storage_buffer(
-        "ground truth",
-        (novel.width * novel.height) as u64 * GROUND_TRUTH_STRIDE as u64 * 4,
-    );
+    let ground_truth = gpu.storage_buffer("ground truth", (novel.width * novel.height) as u64 * GROUND_TRUTH_STRIDE as u64 * 4);
     let rasterizer = Rasterizer::new(&gpu, &params, count, novel.width, novel.height, &ground_truth, 1);
     let rendered = rasterizer.render(&gpu, &novel);
     rendered.to_rgb8().save(&args.out)?;
-    let rgba_path = args.out.with_file_name(format!(
-        "{}_rgba.png",
-        args.out.file_stem().expect("file stem").to_string_lossy()
-    ));
+    let rgba_path = args
+        .out
+        .with_file_name(format!("{}_rgba.png", args.out.file_stem().expect("file stem").to_string_lossy()));
     rendered.to_rgba8().save(&rgba_path)?;
     println!("wrote {} and {}", args.out.display(), rgba_path.display());
     Ok(())

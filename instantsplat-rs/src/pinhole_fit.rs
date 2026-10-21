@@ -42,12 +42,7 @@ pub fn fit_pinhole(view: &DenseView) -> PinholeFit {
         }
     }
     assert!(used >= 16, "only {used} kept points to fit the camera");
-    let solve = |axis: usize| -> Vector2<f64> {
-        normal[axis]
-            .lu()
-            .solve(&rhs[axis])
-            .expect("rays must vary across the image")
-    };
+    let solve = |axis: usize| -> Vector2<f64> { normal[axis].lu().solve(&rhs[axis]).expect("rays must vary across the image") };
     let (x, y) = (solve(0), solve(1));
     assert!(x[1] > 0.0 && y[1] > 0.0, "negative focal length {} {}", x[1], y[1]);
     PinholeFit {

@@ -47,7 +47,11 @@ pub struct LossTerms {
 impl LossTerms {
     /// From the per-pixel terms the loss kernel writes (4 floats per pixel).
     pub fn from_pixel_loss(pixel_loss: &[f32]) -> Self {
-        assert!(!pixel_loss.is_empty() && pixel_loss.len().is_multiple_of(4), "pixel loss length {}", pixel_loss.len());
+        assert!(
+            !pixel_loss.is_empty() && pixel_loss.len().is_multiple_of(4),
+            "pixel loss length {}",
+            pixel_loss.len()
+        );
         let pixels = (pixel_loss.len() / 4) as f64;
         let mean = |term: usize| (pixel_loss.chunks_exact(4).map(|p| p[term] as f64).sum::<f64>() / pixels) as f32;
         Self {

@@ -177,8 +177,8 @@ mod tests {
     #[test]
     fn small_weights_load_and_a_synthetic_forward_is_finite() {
         let device = Device::Cpu;
-        let loaded = load_model(Variant::Small, ReferenceViewStrategy::SaddleBalanced, None, DType::F32, &device)
-            .expect("DA3-SMALL weights");
+        let loaded =
+            load_model(Variant::Small, ReferenceViewStrategy::SaddleBalanced, None, DType::F32, &device).expect("DA3-SMALL weights");
         let (views, height, width) = (3, 4 * PATCH_SIZE, 3 * PATCH_SIZE);
         // A smooth gradient per view, shifted between views, in ImageNet-normalized range.
         let mut pixels = vec![0f32; views * 3 * height * width];

@@ -116,10 +116,16 @@ fn view_tensors(index: usize, view: &ReconstructedView) -> Result<Vec<(String, T
     let intrinsics = vec![fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0];
     let cpu = &Device::Cpu;
     Ok(vec![
-        (format!("image{index}.depth"), Tensor::from_slice(&view.depth, (height, width), cpu)?),
+        (
+            format!("image{index}.depth"),
+            Tensor::from_slice(&view.depth, (height, width), cpu)?,
+        ),
         (format!("image{index}.conf"), Tensor::from_slice(&map.conf, (height, width), cpu)?),
         (format!("image{index}.pts3d"), Tensor::from_vec(points, (height, width, 3), cpu)?),
-        (format!("image{index}.foreground"), Tensor::from_vec(foreground, (height, width), cpu)?),
+        (
+            format!("image{index}.foreground"),
+            Tensor::from_vec(foreground, (height, width), cpu)?,
+        ),
         (format!("image{index}.cam_to_world"), Tensor::from_vec(cam_to_world, (3, 4), cpu)?),
         (format!("image{index}.intrinsics"), Tensor::from_vec(intrinsics, (3, 3), cpu)?),
     ])
@@ -146,7 +152,13 @@ fn main() -> Result<()> {
         // Angle between the optical axis and the direction to the scene center: small
         // when the camera looks at the object.
         let to_center = center - camera.translation;
-        let off_axis = camera.rotation.column(2).dot(&to_center.normalize()).clamp(-1.0, 1.0).acos().to_degrees();
+        let off_axis = camera
+            .rotation
+            .column(2)
+            .dot(&to_center.normalize())
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees();
         let (min_depth, max_depth) = view
             .depth
             .iter()

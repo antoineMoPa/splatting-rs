@@ -21,12 +21,12 @@ use instantsplat_rs::camera::PinholeCamera;
 use instantsplat_rs::camera_pose::pose_distance;
 use instantsplat_rs::cameras_json::read_cameras_json;
 use instantsplat_rs::dense_view::DenseView;
+use instantsplat_rs::densify::DENSIFY_SHORT_RUN;
 use instantsplat_rs::gaussians::GaussianCloud;
 use instantsplat_rs::gpu::Gpu;
 use instantsplat_rs::init_from_points::{INIT_OPACITY, InitSettings, gaussians_from_dense_views};
 use instantsplat_rs::loss::GROUND_TRUTH_STRIDE;
 use instantsplat_rs::network::{Network, NetworkSettings, dense_views_from_images};
-use instantsplat_rs::densify::DENSIFY_SHORT_RUN;
 use instantsplat_rs::optimizer::LEARNING_RATES_SHORT_RUN;
 use instantsplat_rs::point_map_alignment::align_point_maps;
 use instantsplat_rs::rasterizer::Rasterizer;
@@ -139,7 +139,9 @@ pub enum Event {
     Photos(Vec<String>),
     /// A reconstruction, a run load or training ended, with a splat to look at, save and
     /// train when `ok`.
-    Finished { ok: bool },
+    Finished {
+        ok: bool,
+    },
 }
 
 /// The window's end of the worker thread.
@@ -223,9 +225,7 @@ impl Events {
     }
 
     fn status(&self, text: impl Into<String>) {
-        let text = text.into();
-        println!("{text}");
-        self.send(Event::Status(text));
+        self.send(Event::Status(text.into()));
     }
 
     fn progress(&self, stage: Stage, fraction: f32) {
@@ -322,7 +322,8 @@ struct DownloadProgress<'a> {
 impl Progress for DownloadProgress<'_> {
     fn init(&mut self, size: usize, _filename: &str) {
         self.total = size;
-        self.events.status(format!("downloading the model ({} MB, once): 0%", size / 1_000_000));
+        self.events
+            .status(format!("downloading the model ({} MB, once): 0%", size / 1_000_000));
         self.events.progress(Stage::Download, 0.0);
     }
 
@@ -332,7 +333,8 @@ impl Progress for DownloadProgress<'_> {
         let percent = (fraction * 100.0) as usize;
         if percent > self.last_percent {
             self.last_percent = percent;
-            self.events.status(format!("downloading the model ({} MB, once): {percent}%", self.total / 1_000_000));
+            self.events
+                .status(format!("downloading the model ({} MB, once): {percent}%", self.total / 1_000_000));
             self.events.progress(Stage::Download, fraction);
         }
     }
@@ -373,7 +375,9 @@ fn check_photo(path: &Path) -> Result<()> {
 
 /// The file name of `path`, for the status line.
 fn file_name(path: &Path) -> String {
-    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 impl PipelineThread {
@@ -478,7 +482,8 @@ impl PipelineThread {
         let started = Instant::now();
         let seconds = || started.elapsed().as_secs_f64().round() as u64;
         self.events.progress(Stage::Reconstruct, 0.0);
-        self.events.status(format!("reconstructing {} photos with {}…", photos.len(), network.label()));
+        self.events
+            .status(format!("reconstructing {} photos with {}…", photos.len(), network.label()));
         let (mut views, timing) = dense_views_from_images(
             photos,
             &NetworkSettings {
@@ -499,9 +504,7 @@ impl PipelineThread {
             timing.load_weights
         ));
 
-        for alignment in align_point_maps(&mut views) {
-            println!("{alignment}");
-        }
+        align_point_maps(&mut views);
         let cloud = gaussians_from_dense_views(&views, INIT);
         let names = photos.iter().map(|photo| file_name(photo)).collect();
         let scene = Scene::new(self.gpu(), names, views, cloud);
@@ -527,11 +530,18 @@ impl PipelineThread {
         self.events.status(format!("loading {}…", dir.display()));
         let cloud = read_splat_ply(&dir.join(RUN_SPLAT))?;
         let cameras = read_cameras_json(&dir.join(RUN_CAMERAS))?;
-        ensure!(cameras.len() >= MIN_PHOTOS, "{}: {} cameras, training needs at least {MIN_PHOTOS}", RUN_CAMERAS, cameras.len());
+        ensure!(
+            cameras.len() >= MIN_PHOTOS,
+            "{}: {} cameras, training needs at least {MIN_PHOTOS}",
+            RUN_CAMERAS,
+            cameras.len()
+        );
         let views = cameras
             .iter()
             .enumerate()
-            .map(|(index, (_, camera))| load_training_view(&dir.join(format!("input_view{index}.png")), camera, (camera.width, camera.height)))
+            .map(|(index, (_, camera))| {
+                load_training_view(&dir.join(format!("input_view{index}.png")), camera, (camera.width, camera.height))
+            })
             .collect::<Result<Vec<_>>>()?;
         let names = cameras.into_iter().map(|(name, _)| name).collect();
         let scene = Scene::new(self.gpu(), names, views, cloud);
@@ -557,13 +567,19 @@ impl PipelineThread {
         let turntable = scene.turntable();
         let mut trainer =
             Trainer::new(gpu, &scene.cloud, &scene.views, LEARNING_RATES_SHORT_RUN, camera_poses).with_densification(DENSIFY_SHORT_RUN);
-        let live_rasterizer = |trainer: &Trainer| preview_rasterizer(gpu, trainer.params(), trainer.gaussian_count(), preview_size(&scene.views[0].camera));
+        let live_rasterizer = |trainer: &Trainer| {
+            preview_rasterizer(
+                gpu,
+                trainer.params(),
+                trainer.gaussian_count(),
+                preview_size(&scene.views[0].camera),
+            )
+        };
         let render_live = |live: &Rasterizer, orbit: Orbit| render_preview(gpu, live, &scene.views[orbit.view].camera, &turntable, orbit);
         let mut live = live_rasterizer(&trainer);
         self.events.send(Event::Frame(render_live(&live, self.orbit())));
         self.events.progress(stage, 0.0);
 
-        let view_count = trainer.view_count();
         for step in 0..steps {
             if trainer.train_step(step, steps).is_some() {
                 // Densified: the parameters are in a new buffer.
@@ -571,7 +587,7 @@ impl PipelineThread {
             }
             let done = step + 1;
             if done % PREVIEW_EVERY == 0 || done == steps {
-                pollster::block_on(trainer.log_step_async(step, step % view_count));
+                pollster::block_on(trainer.read_step_async());
                 self.drain_renders();
                 self.events.send(Event::Frame(render_live(&live, self.orbit())));
                 self.events.progress(stage, done as f32 / steps as f32);

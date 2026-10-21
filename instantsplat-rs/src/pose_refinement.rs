@@ -114,7 +114,11 @@ impl PoseRefinement {
         assert!(rate_factor > 0.0 && rate_factor <= 1.0, "rate factor {rate_factor}");
         let pose_gradient = self.gradient(view, gradient);
         assert!(
-            pose_gradient.rotation.iter().chain(pose_gradient.translation.iter()).all(|g| g.is_finite())
+            pose_gradient
+                .rotation
+                .iter()
+                .chain(pose_gradient.translation.iter())
+                .all(|g| g.is_finite())
                 && pose_gradient.focal_log_scale.is_finite(),
             "view {view}: pose gradient is not finite: {pose_gradient:?}"
         );
@@ -140,13 +144,21 @@ impl PoseRefinement {
             ];
             let rotation_rate = self.rotation_rate * rate_factor;
             let translation_rate = self.translation_rate * rate_factor;
-            let rates = [rotation_rate, rotation_rate, rotation_rate, translation_rate, translation_rate, translation_rate];
+            let rates = [
+                rotation_rate,
+                rotation_rate,
+                rotation_rate,
+                translation_rate,
+                translation_rate,
+                translation_rate,
+            ];
             self.moments[view].update(&mut params, &gradient, &rates);
             correction.rotation = Vector3::new(params[0], params[1], params[2]);
             correction.translation = Vector3::new(params[3], params[4], params[5]);
         }
         let mut focal = [self.focal_log_scale];
-        self.focal_moments.update(&mut focal, &[pose_gradient.focal_log_scale], &[self.focal_rate * rate_factor]);
+        self.focal_moments
+            .update(&mut focal, &[pose_gradient.focal_log_scale], &[self.focal_rate * rate_factor]);
         self.focal_log_scale = focal[0];
     }
 }

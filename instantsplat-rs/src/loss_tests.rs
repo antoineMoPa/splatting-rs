@@ -112,8 +112,7 @@ fn reference_dssim(width: u32, height: u32, rgbt: &[f32], ground_truth: &[f32]) 
                     }
                 }
                 let (sxx, syy, sxy) = (exx - mx * mx, eyy - my * my, exy - mx * my);
-                let ssim = ((2.0 * mx * my + 1e-4) * (2.0 * sxy + 9e-4))
-                    / ((mx * mx + my * my + 1e-4) * (sxx + syy + 9e-4));
+                let ssim = ((2.0 * mx * my + 1e-4) * (2.0 * sxy + 9e-4)) / ((mx * mx + my * my + 1e-4) * (sxx + syy + 9e-4));
                 sum += ground_truth[(py * w + px) as usize * GROUND_TRUTH_STRIDE + 3] as f64 * (1.0 - ssim);
             }
         }
@@ -189,5 +188,8 @@ fn loss_gradient_matches_finite_differences() {
         }
     }
     assert!(failures.is_empty(), "gradient mismatches:\n{}", failures.join("\n"));
-    assert!(background_checked >= 4, "only {background_checked} background color entries checked");
+    assert!(
+        background_checked >= 4,
+        "only {background_checked} background color entries checked"
+    );
 }

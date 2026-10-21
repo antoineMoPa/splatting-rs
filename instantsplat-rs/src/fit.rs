@@ -126,11 +126,19 @@ pub fn run_fit(settings: &FitSettings) -> Result<()> {
     let cameras = named(&report.cameras);
     let cameras_path = out_dir.join(CAMERAS_FILE);
     write_cameras_json(&cameras_path, &cameras)?;
-    println!("wrote {} ({} cameras, focal scale {:.4})", cameras_path.display(), cameras.len(), report.focal_scale);
+    println!(
+        "wrote {} ({} cameras, focal scale {:.4})",
+        cameras_path.display(),
+        cameras.len(),
+        report.focal_scale
+    );
 
     let trainer = Trainer::new(&gpu, &report.cloud, &views, LEARNING_RATES_3DGS, CameraPoses::Fixed);
     for (index, (view, camera)) in views.iter().zip(&report.cameras).enumerate() {
-        trainer.render_camera(camera).to_rgb8().save(out_dir.join(format!("render_view{index}.png")))?;
+        trainer
+            .render_camera(camera)
+            .to_rgb8()
+            .save(out_dir.join(format!("render_view{index}.png")))?;
         view.to_rgba8().save(out_dir.join(format!("input_view{index}.png")))?;
     }
     println!("wrote {} renders and inputs to {}", views.len(), out_dir.display());

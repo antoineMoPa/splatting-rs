@@ -45,7 +45,11 @@ pub fn run_refine(settings: &RefineSettings) -> Result<()> {
     ensure!(!splat_cameras.is_empty(), "{} has no cameras", cameras_json_path.display());
     let training_height = splat_cameras[0].1.height;
     for (name, camera) in &splat_cameras {
-        ensure!(camera.height == training_height, "{name}: height {} differs from the first camera's {training_height}", camera.height);
+        ensure!(
+            camera.height == training_height,
+            "{name}: height {} differs from the first camera's {training_height}",
+            camera.height
+        );
     }
     println!(
         "{}: {} Gaussians, trained on {} views {} px high",
@@ -61,7 +65,13 @@ pub fn run_refine(settings: &RefineSettings) -> Result<()> {
     let size = training_size(&frames[0].camera, training_height, settings.resolution_scale);
     let started = Instant::now();
     let views = load_views(&frames, size)?;
-    println!("loaded {} frames at {}x{} in {:.2?}", views.len(), size.0, size.1, started.elapsed());
+    println!(
+        "loaded {} frames at {}x{} in {:.2?}",
+        views.len(),
+        size.0,
+        size.1,
+        started.elapsed()
+    );
     let (mut train_views, mut train_names, mut held_views, mut held_names) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (index, (view, frame)) in views.into_iter().zip(&frames).enumerate() {
         if is_held_out(index, settings.hold_out_every) {
@@ -72,7 +82,12 @@ pub fn run_refine(settings: &RefineSettings) -> Result<()> {
             train_names.push(frame.name.clone());
         }
     }
-    println!("{} training views, {} held out: {}", train_views.len(), held_views.len(), held_names.join(" "));
+    println!(
+        "{} training views, {} held out: {}",
+        train_views.len(),
+        held_views.len(),
+        held_names.join(" ")
+    );
 
     let gpu = Gpu::request();
     let renders_before = render_all(&gpu, &cloud, &held_views);
@@ -118,8 +133,12 @@ pub fn run_refine(settings: &RefineSettings) -> Result<()> {
     println!("held-out view: L1 before -> after (foreground only), photo | before | after:");
     for (index, name) in held_names.iter().enumerate() {
         let comparison_path = out_dir.join(format!("heldout_{}.png", name.trim_end_matches(".png")));
-        side_by_side(&[held_views[index].to_rgb8(), renders_before[index].to_rgb8(), renders_after[index].to_rgb8()])
-            .save(&comparison_path)?;
+        side_by_side(&[
+            held_views[index].to_rgb8(),
+            renders_before[index].to_rgb8(),
+            renders_after[index].to_rgb8(),
+        ])
+        .save(&comparison_path)?;
         println!(
             "  {name}: {:.4} -> {:.4} ({:.4} -> {:.4}) {}",
             errors_before[index].all,

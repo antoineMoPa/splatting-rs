@@ -68,20 +68,12 @@ fn center_crop(image: &DynamicImage, mapping: PixelMapping, (width, height): (u3
     assert!(width <= image.width() && height <= image.height(), "crop larger than the image");
     let left = (image.width() - width) / 2;
     let top = (image.height() - height) / 2;
-    (
-        image.crop_imm(left, top, width, height),
-        mapping.then_crop(left as f64, top as f64),
-    )
+    (image.crop_imm(left, top, width, height), mapping.then_crop(left as f64, top as f64))
 }
 
 /// `focal_35mm` overrides every photo's EXIF focal length (35 mm equivalent, in mm); the
 /// intrinsics are only known for images with one or the other.
-pub fn load_images(
-    paths: &[impl AsRef<Path>],
-    focal_35mm: Option<f64>,
-    dtype: DType,
-    device: &Device,
-) -> Result<Vec<InputImage>> {
+pub fn load_images(paths: &[impl AsRef<Path>], focal_35mm: Option<f64>, dtype: DType, device: &Device) -> Result<Vec<InputImage>> {
     ensure!(!paths.is_empty(), "no images");
     let cutouts: Vec<(String, Cutout)> = paths
         .iter()
@@ -117,9 +109,7 @@ pub fn model_inputs_from_cutouts(
         .zip(resized)
         .map(|((name, cutout), (image, mapping))| {
             let (cropped, mapping) = center_crop(&image, mapping, common);
-            let intrinsics = focal_35mm
-                .or(cutout.focal_35mm)
-                .map(|focal| cutout.intrinsics(mapping, focal));
+            let intrinsics = focal_35mm.or(cutout.focal_35mm).map(|focal| cutout.intrinsics(mapping, focal));
             to_model_input(cropped.to_rgba8(), intrinsics, Path::new(name), dtype, device)
         })
         .collect()

@@ -56,7 +56,11 @@ impl Turntable {
         let elevation = ((height / distance).asin() + pitch).clamp(MIN_ELEVATION, MAX_ELEVATION);
         // The camera's direction in the horizontal plane; any one when it is straight above.
         let horizontal = offset + height * down;
-        let across = if horizontal.norm() > 1e-9 * distance { horizontal } else { down.cross(&Vector3::x()).cross(&down) };
+        let across = if horizontal.norm() > 1e-9 * distance {
+            horizontal
+        } else {
+            down.cross(&Vector3::x()).cross(&down)
+        };
         let across = across.normalize();
         let side = down.cross(&across);
         let azimuth = across * yaw.cos() + side * yaw.sin();
@@ -139,8 +143,14 @@ mod tests {
                 let angle = index as f64 * 0.9;
                 let position = object + 2.0 * (across * angle.cos() + side * angle.sin()) - down;
                 let camera = looking_at(position, object, down);
-                let roll = Rotation3::from_axis_angle(&UnitVector3::new_normalize(camera.rotation.column(2).into_owned()), 0.2 * (index as f64 - 2.5));
-                PinholeCamera { rotation: roll.into_inner() * camera.rotation, ..camera }
+                let roll = Rotation3::from_axis_angle(
+                    &UnitVector3::new_normalize(camera.rotation.column(2).into_owned()),
+                    0.2 * (index as f64 - 2.5),
+                );
+                PinholeCamera {
+                    rotation: roll.into_inner() * camera.rotation,
+                    ..camera
+                }
             })
             .collect()
     }
@@ -153,7 +163,10 @@ mod tests {
     fn assert_looks_at_center_without_roll(turntable: &Turntable, camera: &PinholeCamera) {
         let (rotation, translation) = camera.world_to_camera();
         let in_camera = rotation * turntable.center + translation;
-        assert!(in_camera.x.abs() < 1e-9 && in_camera.y.abs() < 1e-9 && in_camera.z > 0.0, "{in_camera}");
+        assert!(
+            in_camera.x.abs() < 1e-9 && in_camera.y.abs() < 1e-9 && in_camera.z > 0.0,
+            "{in_camera}"
+        );
         assert!(camera.rotation.column(0).dot(&turntable.down).abs() < 1e-9, "rolled");
         assert!((camera.rotation.determinant() - 1.0).abs() < 1e-9);
     }
@@ -164,7 +177,11 @@ mod tests {
         let down = Vector3::new(0.2, 0.9, 0.3).normalize();
         let turntable = Turntable::from_cameras(&ring(object, down), Vector3::zeros());
         assert!((turntable.center - object).norm() < 1e-9, "{}", turntable.center);
-        assert!((turntable.down.into_inner() - down).norm() < 1e-9, "{}", turntable.down.into_inner());
+        assert!(
+            (turntable.down.into_inner() - down).norm() < 1e-9,
+            "{}",
+            turntable.down.into_inner()
+        );
     }
 
     #[test]
@@ -176,7 +193,10 @@ mod tests {
         let camera = &cameras[1];
         let distance = (camera.translation - object).norm();
         let start = turntable.view(camera, 0.0, 0.0);
-        assert!((start.translation - camera.translation).norm() < 1e-9, "yaw 0, pitch 0 keeps the position");
+        assert!(
+            (start.translation - camera.translation).norm() < 1e-9,
+            "yaw 0, pitch 0 keeps the position"
+        );
         for (yaw, pitch) in [(0.7, 0.3), (-2.0, 0.0), (1.0, -3.0), (0.0, 3.0)] {
             let view = turntable.view(camera, yaw, pitch);
             assert!(((view.translation - object).norm() - distance).abs() < 1e-9);
@@ -192,8 +212,9 @@ mod tests {
     #[test]
     fn parallel_axes_take_the_fallback_center_and_the_mean_down() {
         let down = Vector3::new(0.0, 1.0, 0.0);
-        let cameras: Vec<_> =
-            (0..3).map(|index| looking_at(Vector3::new(index as f64, 0.0, 0.0), Vector3::new(index as f64, 0.0, 5.0), down)).collect();
+        let cameras: Vec<_> = (0..3)
+            .map(|index| looking_at(Vector3::new(index as f64, 0.0, 0.0), Vector3::new(index as f64, 0.0, 5.0), down))
+            .collect();
         let fallback = Vector3::new(1.0, 0.0, 5.0);
         let turntable = Turntable::from_cameras(&cameras, fallback);
         assert_eq!(turntable.center, fallback);

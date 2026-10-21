@@ -11,8 +11,7 @@ use mapanything_rs::dinov2::resize_grid;
 
 use crate::model::{Progress, Stage};
 use crate::reference_view::{
-    MIN_VIEWS_FOR_SELECTION, ReferenceViewStrategy, order_with_reference_first,
-    positions_of_views, select_reference_view,
+    MIN_VIEWS_FOR_SELECTION, ReferenceViewStrategy, order_with_reference_first, positions_of_views, select_reference_view,
 };
 use crate::rope::rope_tables;
 use crate::variant::{PATCH_SIZE, VariantSpec};
@@ -85,9 +84,7 @@ impl Backbone {
                 .to_dtype(DType::F32)?
                 .to_device(&Device::Cpu)?,
             blocks: (0..spec.depth)
-                .map(|index| {
-                    VitBlock::new(dim, index >= spec.alt_start, spec.feed_forward, vb.pp(format!("blocks.{index}")))
-                })
+                .map(|index| VitBlock::new(dim, index >= spec.alt_start, spec.feed_forward, vb.pp(format!("blocks.{index}"))))
                 .collect::<Result<_>>()?,
             norm: layer_norm(dim, TORCH_LAYER_NORM_EPS, vb.pp("norm"))?,
         })
@@ -111,10 +108,7 @@ impl Backbone {
             (rows, columns),
             (scale(rows), scale(columns)),
         );
-        Tensor::cat(
-            &[class, Tensor::from_vec(resized, (1, rows * columns, self.dim), &Device::Cpu)?],
-            1,
-        )
+        Tensor::cat(&[class, Tensor::from_vec(resized, (1, rows * columns, self.dim), &Device::Cpu)?], 1)
     }
 
     /// The camera tokens of `views` views in reference-first order: [views, 1, dim].
@@ -144,19 +138,12 @@ impl Backbone {
         let dtype = images.dtype();
 
         let patches = self.patch_embed.forward(images)?.flatten_from(2)?.transpose(1, 2)?;
-        let positional = self
-            .positional_embedding(rows, columns)?
-            .to_dtype(dtype)?
-            .to_device(device)?;
+        let positional = self.positional_embedding(rows, columns)?.to_dtype(dtype)?.to_device(device)?;
         let cls = self.cls_token.broadcast_as((views, 1, self.dim))?;
         let mut xs = Tensor::cat(&[&cls, &patches], 1)?.broadcast_add(&positional)?;
 
         let within_view_rope = rope_tables(&rope_positions(rows, columns, false), device, dtype)?;
-        let across_views_rope = rope_tables(
-            &rope_positions(rows, columns, true).repeat(views),
-            device,
-            dtype,
-        )?;
+        let across_views_rope = rope_tables(&rope_positions(rows, columns, true).repeat(views), device, dtype)?;
 
         // Views are kept in input order until the reference is chosen; `order[position]`
         // is then the input view at each position of `xs`.
@@ -168,29 +155,19 @@ impl Backbone {
         for (index, block) in self.blocks.iter().enumerate() {
             progress(Stage::Block(index));
             if index + 1 == self.alt_start && views >= MIN_VIEWS_FOR_SELECTION {
-                let class_tokens = xs
-                    .narrow(1, CAMERA_TOKEN, 1)?
-                    .squeeze(1)?
-                    .to_dtype(DType::F32)?
-                    .to_vec2::<f32>()?;
+                let class_tokens = xs.narrow(1, CAMERA_TOKEN, 1)?.squeeze(1)?.to_dtype(DType::F32)?.to_vec2::<f32>()?;
                 reference_view = select_reference_view(&class_tokens, strategy);
                 order = order_with_reference_first(views, reference_view);
                 let indices = Tensor::new(order.iter().map(|&v| v as u32).collect::<Vec<_>>(), device)?;
                 xs = xs.index_select(&indices, 0)?;
             }
             if index == self.alt_start {
-                xs = Tensor::cat(
-                    &[self.camera_tokens(views)?, xs.narrow(1, 1, tokens_per_view - 1)?],
-                    1,
-                )?;
+                xs = Tensor::cat(&[self.camera_tokens(views)?, xs.narrow(1, 1, tokens_per_view - 1)?], 1)?;
             }
             let across_views = index >= self.alt_start && index % 2 == 1;
             if across_views {
                 xs = block
-                    .forward(
-                        &xs.reshape((1, views * tokens_per_view, self.dim))?,
-                        Some(&across_views_rope),
-                    )?
+                    .forward(&xs.reshape((1, views * tokens_per_view, self.dim))?, Some(&across_views_rope))?
                     .reshape((views, tokens_per_view, self.dim))?;
             } else {
                 let rope = (index >= self.alt_start).then_some(&within_view_rope);
@@ -201,8 +178,7 @@ impl Backbone {
                 let mut out = Tensor::cat(&[&within_view_output, &xs], D::Minus1)?;
                 if order.iter().enumerate().any(|(position, &view)| position != view) {
                     let positions = positions_of_views(&order);
-                    let indices =
-                        Tensor::new(positions.iter().map(|&p| p as u32).collect::<Vec<_>>(), device)?;
+                    let indices = Tensor::new(positions.iter().map(|&p| p as u32).collect::<Vec<_>>(), device)?;
                     out = out.index_select(&indices, 0)?;
                 }
                 // Contiguous: Metal's matmul rejects the strided view.

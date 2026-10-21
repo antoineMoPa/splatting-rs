@@ -13,13 +13,7 @@ const HEAD_HIDDEN_DIM: usize = FEATURE_DIM / 2;
 /// Channel count of each hooked token map after its 1x1 projection.
 const LAYER_DIMS: [usize; 4] = [96, 192, 384, 768];
 
-fn conv(
-    in_dim: usize,
-    out_dim: usize,
-    kernel: usize,
-    padding: usize,
-    vb: VarBuilder,
-) -> Result<Conv2d> {
+fn conv(in_dim: usize, out_dim: usize, kernel: usize, padding: usize, vb: VarBuilder) -> Result<Conv2d> {
     let config = Conv2dConfig {
         padding,
         ..Default::default()
@@ -129,9 +123,7 @@ struct FeatureFusionBlock {
 impl FeatureFusionBlock {
     fn new(has_skip: bool, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            skip_unit: has_skip
-                .then(|| ResidualConvUnit::new(vb.pp("resConfUnit1")))
-                .transpose()?,
+            skip_unit: has_skip.then(|| ResidualConvUnit::new(vb.pp("resConfUnit1"))).transpose()?,
             unit: ResidualConvUnit::new(vb.pp("resConfUnit2"))?,
             out_conv: conv(FEATURE_DIM, FEATURE_DIM, 1, 0, vb.pp("out_conv"))?,
         })
@@ -143,8 +135,7 @@ impl FeatureFusionBlock {
             (None, None) => xs.clone(),
             _ => panic!("skip input and skip unit must come together"),
         };
-        self.out_conv
-            .forward(&upsample_2x(&self.unit.forward(&xs)?)?)
+        self.out_conv.forward(&upsample_2x(&self.unit.forward(&xs)?)?)
     }
 }
 
@@ -173,39 +164,20 @@ impl DptHead {
                 })
                 .collect::<Result<_>>()?,
             head_conv1: conv(FEATURE_DIM, HEAD_HIDDEN_DIM, 3, 1, regressor.pp("conv1"))?,
-            head_conv2: conv(
-                HEAD_HIDDEN_DIM,
-                HEAD_HIDDEN_DIM,
-                3,
-                1,
-                regressor.pp("conv2.0"),
-            )?,
-            head_conv3: conv(
-                HEAD_HIDDEN_DIM,
-                OUTPUT_CHANNELS,
-                1,
-                0,
-                regressor.pp("conv2.2"),
-            )?,
+            head_conv2: conv(HEAD_HIDDEN_DIM, HEAD_HIDDEN_DIM, 3, 1, regressor.pp("conv2.0"))?,
+            head_conv3: conv(HEAD_HIDDEN_DIM, OUTPUT_CHANNELS, 1, 0, regressor.pp("conv2.2"))?,
         })
     }
 
     /// `features`: 4 token maps [batch, patch_h * patch_w, DIM].
     /// Returns [batch, OUTPUT_CHANNELS, patch_h * PATCH_SIZE, patch_w * PATCH_SIZE].
-    pub fn forward(
-        &self,
-        features: &[Tensor; 4],
-        patch_h: usize,
-        patch_w: usize,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, features: &[Tensor; 4], patch_h: usize, patch_w: usize) -> Result<Tensor> {
         let pyramid: Vec<Tensor> = features
             .iter()
             .zip(&self.hook_adapters)
             .map(|(tokens, adapter)| {
                 let (batch, _, dim) = tokens.dims3()?;
-                let spatial = tokens
-                    .transpose(1, 2)?
-                    .reshape((batch, dim, patch_h, patch_w))?;
+                let spatial = tokens.transpose(1, 2)?.reshape((batch, dim, patch_h, patch_w))?;
                 adapter.forward(&spatial)
             })
             .collect::<Result<_>>()?;
@@ -219,12 +191,10 @@ impl DptHead {
         }
 
         // Bilinear to the input resolution (8 x 14 / 8 = 1.75x), then the regressor convs.
-        let out = self.head_conv1.forward(&path)?.upsample_bilinear2d(
-            patch_h * PATCH_SIZE,
-            patch_w * PATCH_SIZE,
-            true,
-        )?;
-        self.head_conv3
-            .forward(&self.head_conv2.forward(&out)?.relu()?)
+        let out = self
+            .head_conv1
+            .forward(&path)?
+            .upsample_bilinear2d(patch_h * PATCH_SIZE, patch_w * PATCH_SIZE, true)?;
+        self.head_conv3.forward(&self.head_conv2.forward(&out)?.relu()?)
     }
 }

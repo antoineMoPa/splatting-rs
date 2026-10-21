@@ -23,9 +23,7 @@ pub fn dense_views(images: &[PathBuf], settings: &NetworkSettings) -> Result<(Ve
     let device = device(settings)?;
     let weights = match &settings.weights {
         Some(path) => path.clone(),
-        None => hf_hub::api::sync::Api::new()?
-            .model(WEIGHTS_REPO.to_string())
-            .get(WEIGHTS_FILE)?,
+        None => hf_hub::api::sync::Api::new()?.model(WEIGHTS_REPO.to_string()).get(WEIGHTS_FILE)?,
     };
     let started = Instant::now();
     // SAFETY: the checkpoint file is not modified while mapped.

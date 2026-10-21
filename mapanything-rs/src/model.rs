@@ -83,16 +83,8 @@ impl MapAnything {
     /// `images`: each [1, 3, H, W], ImageNet-normalized, all the same size, H and W
     /// multiples of PATCH_SIZE. View 0 is the reference view. `intrinsics`: one per image,
     /// known cameras are given to the model instead of letting it guess.
-    pub fn forward(
-        &self,
-        images: &[Tensor],
-        intrinsics: &[Option<Intrinsics>],
-    ) -> Result<Vec<ViewOutput>> {
-        assert_eq!(
-            images.len(),
-            intrinsics.len(),
-            "one intrinsics entry per image"
-        );
+    pub fn forward(&self, images: &[Tensor], intrinsics: &[Option<Intrinsics>]) -> Result<Vec<ViewOutput>> {
+        assert_eq!(images.len(), intrinsics.len(), "one intrinsics entry per image");
         let (_, _, height, width) = images[0].dims4()?;
         let (patch_h, patch_w) = (height / PATCH_SIZE, width / PATCH_SIZE);
         let patch_count = patch_h * patch_w;
@@ -131,12 +123,7 @@ impl MapAnything {
                 let raw = self
                     .dense_head
                     .forward(
-                        &[
-                            view.patches.clone(),
-                            after_7.clone(),
-                            after_11.clone(),
-                            last.clone(),
-                        ],
+                        &[view.patches.clone(), after_7.clone(), after_11.clone(), last.clone()],
                         patch_h,
                         patch_w,
                     )?
@@ -144,22 +131,13 @@ impl MapAnything {
                     .to_dtype(DType::F32)?;
                 let spatial = last.transpose(1, 2)?.reshape((1, DIM, patch_h, patch_w))?;
                 let pose = self.pose_head.forward(&spatial)?;
-                let translation = pose
-                    .translation
-                    .to_dtype(DType::F32)?
-                    .flatten_all()?
-                    .to_vec1::<f32>()?;
-                let quaternion = pose
-                    .quaternion
-                    .to_dtype(DType::F32)?
-                    .flatten_all()?
-                    .to_vec1::<f32>()?;
+                let translation = pose.translation.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+                let quaternion = pose.quaternion.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
                 let [x, y, z, w] = [0, 1, 2, 3].map(|axis| quaternion[axis] as f64);
                 let rotation = UnitQuaternion::from_quaternion(Quaternion::new(w, x, y, z))
                     .to_rotation_matrix()
                     .into_inner();
-                let translation =
-                    Vector3::from_fn(|axis, _| translation[axis] as f64 * scale as f64);
+                let translation = Vector3::from_fn(|axis, _| translation[axis] as f64 * scale as f64);
                 dense_output(&raw, scale, rotation, translation)
             })
             .collect()
@@ -167,12 +145,7 @@ impl MapAnything {
 }
 
 /// Turns the dense head's [6, H, W] raw output into metric camera-frame points.
-fn dense_output(
-    raw: &Tensor,
-    scale: f32,
-    rotation: Matrix3<f64>,
-    translation: Vector3<f64>,
-) -> Result<ViewOutput> {
+fn dense_output(raw: &Tensor, scale: f32, rotation: Matrix3<f64>, translation: Vector3<f64>) -> Result<ViewOutput> {
     let (_, height, width) = raw.dims3()?;
     let channel = |index: usize| -> Result<Vec<f32>> { raw.get(index)?.flatten_all()?.to_vec1() };
     let rays: Vec<Vec<f32>> = (0..3).map(channel).collect::<Result<_>>()?;
@@ -182,12 +155,7 @@ fn dense_output(
     let points_in_camera = (0..height * width)
         .map(|pixel| {
             let ray = [rays[0][pixel], rays[1][pixel], rays[2][pixel]];
-            let norm = ray
-                .iter()
-                .map(|c| c * c)
-                .sum::<f32>()
-                .sqrt()
-                .max(RAY_MIN_NORM);
+            let norm = ray.iter().map(|c| c * c).sum::<f32>().sqrt().max(RAY_MIN_NORM);
             let depth = log_depth[pixel].exp() * scale;
             ray.map(|c| c / norm * depth)
         })

@@ -55,7 +55,12 @@ fn reference_mean_gradients(gaussians: &[ReferenceGaussian], width: u32, height:
             // Back to front: what is composited behind each Gaussian, as (rgb, transmittance).
             let mut behind = [0.0, 0.0, 0.0, transmittance];
             for &(g, alpha, d_alpha_d_power, d, in_front) in contributions.iter().rev() {
-                let color = [gaussians[g].color[0] as f64, gaussians[g].color[1] as f64, gaussians[g].color[2] as f64, 0.0];
+                let color = [
+                    gaussians[g].color[0] as f64,
+                    gaussians[g].color[1] as f64,
+                    gaussians[g].color[2] as f64,
+                    0.0,
+                ];
                 let d_alpha: f64 = (0..4).map(|c| weight[c] * (color[c] * in_front - behind[c] / (1.0 - alpha))).sum();
                 for c in 0..4 {
                     behind[c] += color[c] * alpha * in_front;
@@ -93,7 +98,9 @@ fn densify_stats_match_the_cpu_mean_gradient() {
     let half = [camera.width as f64 / 2.0, camera.height as f64 / 2.0];
     let mut visible = 0;
     for (g, (stat, gradient)) in stats.iter().zip(&reference).enumerate() {
-        let on_screen = gaussians[g].radius > 0.0 && gaussians[g].tile_max[0] > gaussians[g].tile_min[0] && gaussians[g].tile_max[1] > gaussians[g].tile_min[1];
+        let on_screen = gaussians[g].radius > 0.0
+            && gaussians[g].tile_max[0] > gaussians[g].tile_min[0]
+            && gaussians[g].tile_max[1] > gaussians[g].tile_min[1];
         if !on_screen {
             assert_eq!(*stat, DensifyStats::default(), "Gaussian {g} is off screen");
             continue;
@@ -103,7 +110,10 @@ fn densify_stats_match_the_cpu_mean_gradient() {
         assert_eq!(stat.max_radius, gaussians[g].radius, "Gaussian {g}");
         let expected = 2.0 * (gradient[0] * half[0]).hypot(gradient[1] * half[1]);
         let actual = stat.mean_gradient_sum as f64;
-        assert!((actual - expected).abs() <= 1e-3 + 2e-3 * expected, "Gaussian {g}: GPU {actual:.5} vs CPU {expected:.5}");
+        assert!(
+            (actual - expected).abs() <= 1e-3 + 2e-3 * expected,
+            "Gaussian {g}: GPU {actual:.5} vs CPU {expected:.5}"
+        );
     }
     assert!(visible > 20, "only {visible} Gaussians on screen");
 }

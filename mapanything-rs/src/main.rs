@@ -93,18 +93,12 @@ fn point_map_tensors(index: usize, point_map: &PointMap) -> Result<[(String, Ten
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let device = if args.cpu {
-        Device::Cpu
-    } else {
-        Device::new_metal(0)?
-    };
+    let device = if args.cpu { Device::Cpu } else { Device::new_metal(0)? };
     let dtype = DType::from(args.precision);
 
     let weights = match &args.weights {
         Some(path) => path.clone(),
-        None => hf_hub::api::sync::Api::new()?
-            .model(WEIGHTS_REPO.to_string())
-            .get(WEIGHTS_FILE)?,
+        None => hf_hub::api::sync::Api::new()?.model(WEIGHTS_REPO.to_string()).get(WEIGHTS_FILE)?,
     };
     let started = Instant::now();
     // SAFETY: the checkpoint file is not modified while mapped.
@@ -113,14 +107,8 @@ fn main() -> Result<()> {
     println!("loaded {} in {:.2?}", weights.display(), started.elapsed());
 
     let images = load_images(&args.images, args.focal_35mm, dtype, &device)?;
-    let known = images
-        .iter()
-        .filter(|image| image.intrinsics.is_some())
-        .count();
-    println!(
-        "camera intrinsics known for {known} of {} images",
-        images.len()
-    );
+    let known = images.iter().filter(|image| image.intrinsics.is_some()).count();
+    println!("camera intrinsics known for {known} of {} images", images.len());
     let reconstruction = reconstruct(&model, &images, &device)?;
 
     if let Some(raw_out) = &args.raw_out {
@@ -149,10 +137,7 @@ fn main() -> Result<()> {
                 format!("image{index}.cam_to_world"),
                 Tensor::from_vec(cam_to_world, (3, 4), &Device::Cpu)?,
             );
-            tensors.insert(
-                format!("image{index}.focal"),
-                Tensor::new(camera.focal as f32, &Device::Cpu)?,
-            );
+            tensors.insert(format!("image{index}.focal"), Tensor::new(camera.focal as f32, &Device::Cpu)?);
         }
         candle_core::safetensors::save(&tensors, raw_out)?;
         println!("wrote {}", raw_out.display());

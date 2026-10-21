@@ -35,11 +35,15 @@ fn main() -> Result<()> {
     let views = cameras
         .iter()
         .enumerate()
-        .map(|(i, (_, camera))| {
-            load_training_view(&args.run.join(format!("input_view{i}.png")), camera, (camera.width, camera.height))
-        })
+        .map(|(i, (_, camera))| load_training_view(&args.run.join(format!("input_view{i}.png")), camera, (camera.width, camera.height)))
         .collect::<Result<Vec<_>>>()?;
-    println!("{} Gaussians, {} views of {}x{}", cloud.len(), views.len(), views[0].width, views[0].height);
+    println!(
+        "{} Gaussians, {} views of {}x{}",
+        cloud.len(),
+        views.len(),
+        views[0].width,
+        views[0].height
+    );
     let gpu = Gpu::request();
     for (label, poses) in POSES {
         let mut trainer = Trainer::new(&gpu, &cloud, &views, LEARNING_RATES_SHORT_RUN, poses);

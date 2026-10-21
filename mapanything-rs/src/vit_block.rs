@@ -23,8 +23,7 @@ fn split_heads(xs: &Tensor) -> Result<Tensor> {
 /// [batch, heads, tokens, HEAD_DIM] -> [batch, tokens, heads * HEAD_DIM]
 fn merge_heads(xs: &Tensor) -> Result<Tensor> {
     let (batch, heads, token_count, head_dim) = xs.dims4()?;
-    xs.transpose(1, 2)?
-        .reshape((batch, token_count, heads * head_dim))
+    xs.transpose(1, 2)?.reshape((batch, token_count, heads * head_dim))
 }
 
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
@@ -66,8 +65,7 @@ impl Module for SwiGlu {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let x12 = self.w12.forward(xs)?;
         let hidden = x12.dim(D::Minus1)? / 2;
-        let gated =
-            (x12.narrow(D::Minus1, 0, hidden)?.silu()? * x12.narrow(D::Minus1, hidden, hidden)?)?;
+        let gated = (x12.narrow(D::Minus1, 0, hidden)?.silu()? * x12.narrow(D::Minus1, hidden, hidden)?)?;
         self.w3.forward(&gated)
     }
 }

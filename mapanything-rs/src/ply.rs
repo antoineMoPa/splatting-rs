@@ -18,11 +18,7 @@ pub struct ColoredPoint {
 ///
 /// Points are in the OpenCV camera convention (x right, y down, z forward); viewers
 /// expect y up, so points are turned 180 degrees around x (y and z negated).
-pub fn confident_points(
-    point_map: &PointMap,
-    image: &RgbImage,
-    min_conf: f32,
-) -> Result<Vec<ColoredPoint>> {
+pub fn confident_points(point_map: &PointMap, image: &RgbImage, min_conf: f32) -> Result<Vec<ColoredPoint>> {
     ensure!(
         (point_map.width as u32, point_map.height as u32) == image.dimensions(),
         "point map {}x{} does not match image {:?}",

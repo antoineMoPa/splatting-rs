@@ -17,7 +17,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use egui::{
-    CentralPanel, ColorImage, ComboBox, CornerRadius, CursorIcon, Frame, Image, RichText, ScrollArea, Sense, TextureHandle, TextureOptions, Vec2,
+    CentralPanel, ColorImage, ComboBox, CornerRadius, CursorIcon, Frame, Image, RichText, ScrollArea, Sense, TextureHandle, TextureOptions,
+    Vec2,
 };
 use instantsplat_rs::network::Network;
 use instantsplat_rs::training::CameraPoses;
@@ -167,7 +168,11 @@ impl App {
 
     /// The start button's text: it says when it also downloads the selected model.
     fn start_label(&self) -> String {
-        let choice = self.models.iter().find(|choice| choice.network == self.network).expect("the chosen network is a model choice");
+        let choice = self
+            .models
+            .iter()
+            .find(|choice| choice.network == self.network)
+            .expect("the chosen network is a model choice");
         match choice.cached() {
             Some(_) => "Make the splat".to_string(),
             None => format!("Download the {} model and make the splat", choice.size_label),
@@ -181,7 +186,10 @@ impl App {
             self.status = format!("pick at least {MIN_PHOTOS} photos");
             return;
         }
-        println!("photos: {}", photos.iter().map(|photo| photo.display().to_string()).collect::<Vec<_>>().join(" "));
+        println!(
+            "photos: {}",
+            photos.iter().map(|photo| photo.display().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.busy = true;
         // Kept after the run: another model can be tried on the same photos.
         self.chosen = photos.clone();
@@ -195,7 +203,11 @@ impl App {
     fn training(&self) -> Training {
         Training {
             steps: self.train_steps,
-            camera_poses: if self.refine_poses { CameraPoses::Refined } else { CameraPoses::Fixed },
+            camera_poses: if self.refine_poses {
+                CameraPoses::Refined
+            } else {
+                CameraPoses::Fixed
+            },
         }
     }
 
@@ -207,7 +219,10 @@ impl App {
 
     /// More training on the scene, "Advanced"'s steps of it.
     fn train_more(&mut self) {
-        assert!(!self.busy && self.has_scene && self.train_steps > 0, "train_more without a scene or steps, or while busy");
+        assert!(
+            !self.busy && self.has_scene && self.train_steps > 0,
+            "train_more without a scene or steps, or while busy"
+        );
         self.busy = true;
         self.progress = Some(0.0);
         self.worker.train(self.training());
@@ -217,7 +232,12 @@ impl App {
     fn model_dropdown(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             look::muted(ui, "model", SMALL_SIZE);
-            let selected = &self.models.iter().find(|choice| choice.network == self.network).expect("the chosen network is a model choice").label;
+            let selected = &self
+                .models
+                .iter()
+                .find(|choice| choice.network == self.network)
+                .expect("the chosen network is a model choice")
+                .label;
             ui.add_enabled_ui(!self.busy, |ui| {
                 ComboBox::from_id_salt("model")
                     .selected_text(RichText::new(selected).size(SMALL_SIZE).color(look::MUTED))
@@ -337,7 +357,9 @@ impl App {
         let (rect, response) = ui.allocate_exact_size(size, Sense::drag());
         ui.painter().add(VIEW_SHADOW.as_shape(rect, CornerRadius::same(VIEW_RADIUS)));
         match &self.preview {
-            Some(texture) => Image::new(texture).corner_radius(CornerRadius::same(VIEW_RADIUS)).paint_at(ui, rect),
+            Some(texture) => Image::new(texture)
+                .corner_radius(CornerRadius::same(VIEW_RADIUS))
+                .paint_at(ui, rect),
             None => {
                 ui.painter().rect_filled(rect, f32::from(VIEW_RADIUS), look::VIEW_BG);
             }

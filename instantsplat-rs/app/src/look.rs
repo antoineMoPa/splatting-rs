@@ -2,8 +2,8 @@
 //! dashed drop zone, the progress bar, the blue primary button and the small white one.
 
 use egui::{
-    Align, Button, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText,
-    Sense, Shadow, Shape, Stroke, TextStyle, Ui, Vec2, Visuals,
+    Align, Button, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText, Sense,
+    Shadow, Shape, Stroke, TextStyle, Ui, Vec2, Visuals,
 };
 
 pub const BG: Color32 = Color32::from_rgb(0xf6, 0xf5, 0xf2);
@@ -150,13 +150,20 @@ pub fn drop_zone(ui: &mut Ui, title: &str, subtitle: &str, hovering_files: bool,
         title_color,
     );
     painter.text(
-        Pos2::new(rect.center().x, title_y + line_height(DROP_TITLE_SIZE) / 2.0 + line_height(SMALL_SIZE) / 2.0),
+        Pos2::new(
+            rect.center().x,
+            title_y + line_height(DROP_TITLE_SIZE) / 2.0 + line_height(SMALL_SIZE) / 2.0,
+        ),
         egui::Align2::CENTER_CENTER,
         subtitle,
         FontId::new(SMALL_SIZE, FontFamily::Proportional),
         MUTED,
     );
-    if enabled { response.on_hover_cursor(CursorIcon::PointingHand) } else { response }
+    if enabled {
+        response.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 /// The page's thin bar, `fraction` of it in the accent colour.

@@ -15,9 +15,9 @@ use std::time::Duration;
 
 #[cfg(feature = "networks")]
 use anyhow::Result;
+use candle_core::DType;
 #[cfg(feature = "networks")]
 use candle_core::Device;
-use candle_core::DType;
 use clap::ValueEnum;
 use mapanything_rs::image_input::Intrinsics;
 
@@ -110,8 +110,5 @@ pub fn use_given_intrinsics(view: &mut DenseView, given: Intrinsics, predicted: 
 }
 
 pub fn image_name(path: &Path) -> String {
-    path.file_name()
-        .expect("image path has a file name")
-        .to_string_lossy()
-        .into_owned()
+    path.file_name().expect("image path has a file name").to_string_lossy().into_owned()
 }

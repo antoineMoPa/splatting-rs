@@ -190,11 +190,7 @@ impl Rasterizer {
             "{width}x{height} has {} tiles, over the {MAX_TILES} the sort keys allow",
             tiles_x * tiles_y
         );
-        assert_eq!(
-            params.size(),
-            (gaussian_count * PARAM_STRIDE * 4) as u64,
-            "params buffer size"
-        );
+        assert_eq!(params.size(), (gaussian_count * PARAM_STRIDE * 4) as u64, "params buffer size");
         let pixel_count = (width * height) as usize;
         assert_eq!(
             ground_truth.size(),
@@ -241,20 +237,15 @@ impl Rasterizer {
             gpu.storage_buffer("values a", intersection_capacity as u64 * 4),
             gpu.storage_buffer("values b", intersection_capacity as u64 * 4),
         ];
-        let intersection_gaussian =
-            gpu.storage_buffer("intersection gaussian", intersection_capacity as u64 * 4);
+        let intersection_gaussian = gpu.storage_buffer("intersection gaussian", intersection_capacity as u64 * 4);
         let ranges = gpu.storage_buffer("tile ranges", (tiles_x * tiles_y) as u64 * 2 * 4);
         let image = gpu.storage_buffer("image", pixel_count as u64 * 4 * 4);
         let contributions = gpu.storage_buffer("contributions", pixel_count as u64 * 4);
         let ssim_partials = gpu.storage_buffer("ssim partials", pixel_count as u64 * 3 * 4 * 4);
         let loss_gradient = gpu.storage_buffer("loss gradient", pixel_count as u64 * 4 * 4);
         let pixel_loss = gpu.storage_buffer("pixel loss", pixel_count as u64 * 4 * 4);
-        let intersection_gradients = gpu.storage_buffer(
-            "intersection gradients",
-            (intersection_capacity * GRAD_STRIDE * 4) as u64,
-        );
-        let param_gradients =
-            gpu.storage_buffer("param gradients", (gaussian_count * PARAM_STRIDE * 4) as u64);
+        let intersection_gradients = gpu.storage_buffer("intersection gradients", (intersection_capacity * GRAD_STRIDE * 4) as u64);
+        let param_gradients = gpu.storage_buffer("param gradients", (gaussian_count * PARAM_STRIDE * 4) as u64);
         let camera_partials = gpu.storage_buffer(
             "camera gradient partials",
             workgroups(gaussian_count, 256) as u64 * CAMERA_GRAD_STRIDE as u64 * 4,
@@ -262,29 +253,19 @@ impl Rasterizer {
         let camera_gradient = gpu.storage_buffer("camera gradient", (CAMERA_GRAD_STRIDE * 4) as u64);
         let densify_stats = gpu.storage_buffer("densify stats", gaussian_count as u64 * 4 * 4);
 
-        let project_forward =
-            gpu.compute_pipeline("project forward", &shaders::project_forward(), "main");
-        let scan_tile_counts =
-            gpu.compute_pipeline("scan tile counts", &shaders::scan(), "scan_tile_counts");
+        let project_forward = gpu.compute_pipeline("project forward", &shaders::project_forward(), "main");
+        let scan_tile_counts = gpu.compute_pipeline("scan tile counts", &shaders::scan(), "scan_tile_counts");
         let emit_tile_keys = gpu.compute_pipeline("emit tile keys", &shaders::emit_tile_keys(), "main");
         let tile_ranges = gpu.compute_pipeline("tile ranges", &shaders::tile_ranges(), "main");
-        let rasterize_forward =
-            gpu.compute_pipeline("rasterize forward", &shaders::rasterize_forward(), "main");
+        let rasterize_forward = gpu.compute_pipeline("rasterize forward", &shaders::rasterize_forward(), "main");
         let ssim_forward = gpu.compute_pipeline("ssim forward", &shaders::ssim_forward(), "main");
         let loss = gpu.compute_pipeline("loss", &shaders::loss(), "main");
-        let rasterize_backward =
-            gpu.compute_pipeline("rasterize backward", &shaders::rasterize_backward(), "main");
-        let project_backward =
-            gpu.compute_pipeline("project backward", &shaders::project_backward(), "main");
-        let reduce_camera_gradient =
-            gpu.compute_pipeline("reduce camera gradient", &shaders::reduce_camera_gradient(), "main");
+        let rasterize_backward = gpu.compute_pipeline("rasterize backward", &shaders::rasterize_backward(), "main");
+        let project_backward = gpu.compute_pipeline("project backward", &shaders::project_backward(), "main");
+        let reduce_camera_gradient = gpu.compute_pipeline("reduce camera gradient", &shaders::reduce_camera_gradient(), "main");
 
-        let project_forward_group =
-            gpu.bind_group(&project_forward, &[&camera, params, &projected, &tile_counts]);
-        let scan_tile_counts_group = gpu.bind_group(
-            &scan_tile_counts,
-            &[&tile_counts, &tile_offsets, &scan_control, &meta, &indirect],
-        );
+        let project_forward_group = gpu.bind_group(&project_forward, &[&camera, params, &projected, &tile_counts]);
+        let scan_tile_counts_group = gpu.bind_group(&scan_tile_counts, &[&tile_counts, &tile_offsets, &scan_control, &meta, &indirect]);
         let emit_tile_keys_group = gpu.bind_group(
             &emit_tile_keys,
             &[
@@ -361,8 +342,7 @@ impl Rasterizer {
                 &densify_stats,
             ],
         );
-        let reduce_camera_gradient_group =
-            gpu.bind_group(&reduce_camera_gradient, &[&camera_partials, &camera_gradient]);
+        let reduce_camera_gradient_group = gpu.bind_group(&reduce_camera_gradient, &[&camera_partials, &camera_gradient]);
         let sort = RadixSort::new(
             gpu,
             [&keys[0], &keys[1]],
@@ -416,11 +396,7 @@ impl Rasterizer {
 
     /// The camera of the next forward and backward passes. Takes effect at the next submit.
     pub fn set_camera(&self, gpu: &Gpu, camera: &PinholeCamera) {
-        assert_eq!(
-            (camera.width, camera.height),
-            (self.width, self.height),
-            "camera image size"
-        );
+        assert_eq!((camera.width, camera.height), (self.width, self.height), "camera image size");
         gpu.write(&self.camera, &[camera.uniform(TILE)]);
     }
 
